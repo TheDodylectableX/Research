@@ -72,7 +72,7 @@ typedef struct { // Base vertex entry without ColorTex or UnskinnedCompressed is
         VEC4UB BoneIndices <name="Bone Indices">;
     }
 
-    if (header.vertexType == COLOR_TEX) { byte unkColorTex[28]; }
+    if (header.vertexType == COLOR_TEX) byte unkColorTex[28];
 } Vertex;
 
 //---------------------------------------------------------------------
@@ -80,7 +80,7 @@ typedef struct { // Base vertex entry without ColorTex or UnskinnedCompressed is
 struct {
     Header header;
     Vertex Vertices[header.VertexCount] <optimize=false>;
-    VEC3UI Triangles[header.FaceCount];
+    VEC3UI Triangles[header.FaceCount]  <optimize=false>;
 } HXMESH <name="Harmonix Forge Engine HXMESH Model">;
 
 //---------------------------------------------------------------------

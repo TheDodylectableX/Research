@@ -16,22 +16,22 @@
 LittleEndian();
 
 typedef enum <uint> {
-    NONE               = 0,
+    NONE                    = 0,
     SKELETAL_MESH_CHARACTER = 2,
-    GAME_ASSET_1       = 3,
-    GAME_ASSET_2       = 4,
-    SKELETAL_MESH_BASIC = 5, // Used for stages and props
-    GAME_ASSET_3       = 10,
-    VISUAL_EFFECT_MAYBE = 11, // Magic is MINA, That's ANIM reversed but the files don't look like animations...
-    GAME_ASSET_4       = 12,
-    GAME_ASSET_UNKNOWN = 255,
+    GAME_ASSET_1            = 3,
+    GAME_ASSET_2            = 4,
+    SKELETAL_MESH_BASIC     = 5,  // Used for stages and props
+    GAME_ASSET_3            = 10, // Full of floating points, Actual animation data?
+    VISUAL_EFFECT_MAYBE     = 11, // Magic is MINA, That's ANIM reversed but the files don't look like animations...
+    GAME_ASSET_4            = 12,
+    GAME_ASSET_UNKNOWN      = 255,
 } ASSET_TYPE;
 
 //--------------------------------------------------------------------------------
 
 typedef struct {
     ushort Version;
-    ushort fileCount <name="File Count", comment="Not always filled.">;
+    ushort fileCount    <name="File Count", comment="Not always filled.">;
     uint fileNameLength <name="File Name Length", comment="Always 8 characters long">;
 } Header <name="Header", read=Str("MUK Archive Version %u | %u Files", this.Version, this.fileCount)>;
 
@@ -47,11 +47,16 @@ typedef struct {
     FSeek(currentPosition);
 } File <read=Str("%s | File Type: %s | File Size: %u bytes | File Offset: %u", this.fileName, EnumToString(this.fileType), this.fileSize, this.fileOffset)>;
 
-/* // Structure for MASTER.MUK from the PS1 version, Header doesn't exist on there.
+/* // Structure for MASTER.MUK from the PS1 version, Header and fileType don't exist on there.
 struct {
     char fileName[8] <name="File Name">;
     uint fileSize    <name="File Size">;
-    uint fileOffset  <name="File Offset">;    
+    uint fileOffset  <name="File Offset">;
+
+    local uint64 currentPosition <hidden=true> = FTell();
+    FSeek(fileOffset);
+    if (fileSize > 0) byte fileData[fileSize] <name="File Data">;
+    FSeek(currentPosition);
 } File[510] <read=fileName, optimize=false>;
 */
 

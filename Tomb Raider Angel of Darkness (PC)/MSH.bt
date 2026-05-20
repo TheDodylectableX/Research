@@ -21,7 +21,7 @@ typedef struct {
     uint64 FaceCount <name="Face Count">;
     uint64 MeshCount <name="Mesh Count">;
     FSkip(16); // Offset | Pointer storage area for the engine
-} Header <name="Header", read=Str("%d Meshes | %d Vertices | %d Faces | File Size: %d bytes", this.MeshCount, this.VertexCount, this.FaceCount / 3, this.FileSize)>;
+} Header <name="Header", read=Str("%u Meshes | %u Vertices | %u Faces | File Size: %u bytes", this.MeshCount, this.VertexCount, this.FaceCount / 3, this.FileSize)>;
 
 typedef struct {
     VEC3F Positions;

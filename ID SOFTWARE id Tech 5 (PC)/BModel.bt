@@ -23,8 +23,8 @@ typedef struct {
 
 typedef enum <int> {
     USE_TRISTRIPS    = -1,
-    USE_TRIANGLELIST = 0,
-} SUBMESH_FLAG;
+    USE_TRIANGLELIST = 0
+} MESH_FLAG;
 
 //-------------------------------------------------------------------------------------------
 
@@ -39,7 +39,7 @@ typedef struct {
     BigEndian();
     VEC3F TotalBoundingBox <name="Total Model Bounding Box">;
     uint MaterialCount <name="Material Count">;
-} Header <name="Header", read=Str("%d Meshes", this.MaterialCount)>;
+} Header <name="Header", read=Str("%u Meshes", this.MaterialCount)>;
 
 typedef struct {
     LittleEndian();
@@ -49,11 +49,11 @@ typedef struct {
     uint MaterialMeshIndex <name="Material Mesh Index">;
     uint VertexStart <name="Vertex Start">;
     uint VertexEnd <name="Vertex End">;
-} Material <name="Material", read=Str("Material Path: %s | Vertex Start: %d | Vertex End: %d",
+} Material <name="Material", read=Str("Material Path: %s | Vertex Start: %u | Vertex End: %u",
                                        this.MaterialPath.ActualString, this.VertexStart, this.VertexEnd)>;
 
 typedef struct {
-    SUBMESH_FLAG SubmeshFlag <name="Submesh Flag">;
+    MESH_FLAG SubmeshFlag <name="Submesh Flag">;
     uint SubmeshUnk <name="Submesh Unknown 1">;
     uint VertexCount <name="Vertex Count">;
     uint FaceCount <name="Face Count">;
@@ -65,13 +65,13 @@ typedef struct {
     
     if (VertexCount > 0) MD6Vertex VertexData [VertexCount] <optimize=false>;
     if (FaceCount > 0) {
-        if (SubmeshFlag == USE_TRISTRIPS) { ushort Triangles[FaceCount] <comment="Tristrips (FF)", optimize=false>; } 
-        else if (SubmeshFlag == USE_TRIANGLELIST) { VEC3US Triangles[FaceCount / 3] <name="Triangle List", optimize=false>; }
+        if (SubmeshFlag == USE_TRISTRIPS) ushort Triangles[FaceCount] <comment="Tristrips (FF)", optimize=false>;
+        else if (SubmeshFlag == USE_TRIANGLELIST) VEC3US Triangles[FaceCount / 3] <name="Triangle List", optimize=false>;
     }
 
     uint FooterData[7] <name="Footer Data">;
     char FooterMagic[4] <name="Footer Magic">;
-} Mesh <name="Mesh", read=Str("Vertex Count: %d | Face Count: %d", this.VertexCount, this.FaceCount)>;
+} Mesh <name="Mesh", read=Str("Vertex Count: %u | Face Count: %u", this.VertexCount, this.FaceCount)>;
 
 //-------------------------------------------------------------------------------------------
 

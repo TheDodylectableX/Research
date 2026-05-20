@@ -30,31 +30,31 @@ uint fileCount <name="File Count">;
 
 if (Type == "Seg") {
     struct Segment {
-        uint fileOffset <name="File Offset", comment="Absolute">;
-        uint fileSizeCompressed <name="File Size (Compressed)", comment="LZX">;
+        uint fileOffset           <name="File Offset",              comment="Absolute">;
+        uint fileSizeCompressed   <name="File Size (Compressed)",   comment="LZX">;
         uint fileSizeUncompressed <name="File Size (Uncompressed)", comment="0 = Uncompressed">;
-        int fileParentID <name="File Parent ID", comment="It will refer to another asset if there is by the order of file listing, Otherwise it'll be -1 which is none">;
+        int  fileParentID         <name="File Parent ID",           comment="It will refer to another asset if there is by the order of file listing, Otherwise it'll be -1 which is none">;
     };
-
-    Segment Segments[fileCount] <read=Str("File Offset: %u | File Size (Compressed): %u | File Size Uncompressed: %u | File Parent ID: %d", this.fileOffset, this.fileSizeCompressed, this.fileSizeUncompressed, this.fileParentID), optimize=false>;
+    Segment Segments[fileCount] <read=Str("File Offset: %u | File Size (Compressed): %u | File Size Uncompressed: %u | File Parent ID: %d",
+                                          this.fileOffset, this.fileSizeCompressed, this.fileSizeUncompressed, this.fileParentID), optimize=false>;
 };
 
 //--------------------------------------------------------------------------------------
 
 if (Type == "Tex") {
     struct TexSegment {
-        uint fileOffset     <name="File Offset", comment="Relative (Starts right after the last entry in TexSegment2)">;
+        uint fileOffset      <name="File Offset", comment="Relative (Starts right after the last entry in TexSegment2)">;
         uint x360ImageWidth  <name="X360 Image Width">;
         uint x360ImageHeight <name="X360 Image Height">;
         uint n64ImageWidth   <name="N64 Image Width">;
         uint n64ImageHeight  <name="N64 Image Height">;
         uint fileSizeCompressed   <name="File Size (Compressed)", comment="LZX">;
         uint fileSizeUncompressed <name="File Size (Uncompressed)", comment="0 = Uncompressed">;
-        int fileParentID  <name="File Parent ID", comment="It will refer to another asset if there is by the order of file listing, Otherwise it'll be -1 which is none">;
-        int unkA          <comment="Either 1 or 0">;
-        int unkB          <comment="Always 50">;
-        int padB          <comment="Or flag">;
-        int padC          <comment="Or flag">;
+        int fileParentID     <name="File Parent ID", comment="It will refer to another asset if there is by the order of file listing, Otherwise it'll be -1 which is none">;
+        int unkA             <comment="Either 1 or 0">;
+        int unkB             <comment="Always 50">;
+        int padB             <comment="Or flag">;
+        int padC             <comment="Or flag">;
         int unkC;
         };
 
@@ -83,7 +83,8 @@ if (Type == "Tex") {
     // If it's 134 then 3092, 320
     // J isn't a constant
 
-    TexSegment Segments[fileCount] <read=Str("File Offset: %u | File Size (Compressed): %u | File Size (Uncompressed): %u | Image Dimensions: %ux%u | File Parent ID: %d", this.fileOffset, this.fileSizeUncompressed, this.fileSizeUncompressed, this.x360ImageWidth, this.x360ImageHeight, this.fileParentID), optimize=false>;
+    TexSegment Segments[fileCount]   <read=Str("File Offset: %u | File Size (Compressed): %u | File Size (Uncompressed): %u | Image Dimensions: %ux%u | File Parent ID: %d",
+                                               this.fileOffset, this.fileSizeUncompressed, this.fileSizeUncompressed, this.x360ImageWidth, this.x360ImageHeight, this.fileParentID), optimize=false>;
     TexSegment2 Segments2[fileCount] <read=Str("Format: %s", EnumToString(this.v9))>;
 };
 

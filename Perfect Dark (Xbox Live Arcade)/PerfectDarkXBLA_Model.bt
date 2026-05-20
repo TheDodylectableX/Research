@@ -39,8 +39,8 @@ if (Header.boneCount > 0) struct { float Matrix[12]; } Skeleton[Header.boneCount
 FSeek(Header.vertexDataRelatedOffset);
 struct {
     if (Header.assetType == 0x447A0000 || Header.assetType == 0x43480000 || Header.assetType == 0x443B8000) { ubyte Unknown[36]; }
-    else if (Header.assetType == 0x42C80000) { ubyte Unknown[12]; }
-    else { ubyte Unknown[36]; } // Some placeholder but I don't think there's other formats than these
+    else if (Header.assetType == 0x42C80000) ubyte Unknown[12];
+    else ubyte Unknown[36]; // Some placeholder but I don't think there's other formats than these
 } VertexRelatedData;
 
 FSeek(Header.meshDataOffset);
@@ -78,7 +78,6 @@ struct Face { VEC3US Indices <comment="Winding Order is i1 > i3 > i2">; };
 // Dynamically size the face array by calculating the end of the final submesh
 local uint totalFaces <hidden=true> = 0;
 if (Header.meshCount > 0) { totalFaces = Meshes[Header.meshCount - 1].subMeshStartingFaceCount + Meshes[Header.meshCount - 1].subMeshFaceCount; }
-
 if (totalFaces > 0) { Face Faces[totalFaces]; }
 
 //-----------------------------------------------------------------------------------

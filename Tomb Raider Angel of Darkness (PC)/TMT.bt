@@ -31,7 +31,7 @@ typedef struct {
     uint vertexCount <name="Vertex Count", comment="Per morph target">;
     uint Unknown <comment="Always 0x18000000">;
     FSkip(4); // Padding
-} Header <name="Header", read=Str("Hash: 0x%X | Linked Submesh: 0x%X | %d Morph Targets | %d Vertices", this.TMTHash, this.linkedSubmeshHash, this.morphTargetCount, this.vertexCount)>;
+} Header <name="Header", read=Str("Hash: 0x%X | Linked Submesh: 0x%X | %u Morph Targets | %u Vertices", this.TMTHash, this.linkedSubmeshHash, this.morphTargetCount, this.vertexCount)>;
 
 typedef struct {
     VEC3F Positions;

@@ -46,8 +46,7 @@ typedef struct {
     ubyte MaterialIndex <name="Material Index">;
     VEC4UB Indices <name="Bone Indices">;
     VEC4UB Weights <name="Bone Weights">;
-    float U;
-    float V;
+    VEC2F UV;
 } Vertices <name="Vertices">;
 
 typedef struct { VEC3US Triangles; } Triangles <name="Triangles">;
@@ -58,7 +57,7 @@ struct LOD;
 
 string ReadLOD(LOD &lod) {
     string s;
-    SPrintf(s, "LOD #%d | Vertex Count: %d | Triangle Count: %d | %d Textures", lod.LODIndex, lod.VertexCount, lod.FaceCount, lod.TextureCount);
+    SPrintf(s, "LOD #%u | Vertex Count: %u | Triangle Count: %u | %u Textures", lod.LODIndex, lod.VertexCount, lod.FaceCount, lod.TextureCount);
     return s;
 }
 

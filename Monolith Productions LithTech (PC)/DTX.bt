@@ -1,0 +1,108 @@
+//------------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: DTX.bt
+//   Authors: Dodylectable, AkvenJan
+//   Version: 1.0
+//   Purpose: Reverse engineering Monolith Productions' LithTech Engine texture format
+//  Category: Textures
+// File Mask: *.DTX
+//  ID Bytes: 00 00 00 00
+//   History: 
+//------------------------------------------------------------------------------------
+
+// https://github.com/jsj2008/lithtech/blob/master/libs/dtxmgr/dtxmgr_lib.h
+// https://github.com/jsj2008/lithtech/blob/master/libs/dtxmgr/dtxmgr_lib.cpp
+// https://github.com/AkvenJan/DTX-Meta-Transfer/tree/main/research
+
+LittleEndian();
+
+/* Which flags actually get saved.
+#define DTX_FLAGSAVEMASK    (DTX_FULLBRITE|DTX_32BITSYSCOPY|DTX_PREFER16BIT|\
+                              DTX_SECTIONSFIXED|DTX_PREFER4444|DTX_PREFER5551|\
+                              DTX_CUBEMAP|DTX_BUMPMAP|DTX_LUMBUMPMAP|DTX_NOSYSCACHE) */
+
+typedef enum <int> {
+    SHOGO_BLOOD   = -2, // LithTech V1.0 (Shogo and Blood II) (Uses Palettes)
+    TALON_JUPITER = -5  // LithTech V2.0, V2.2 (Talon) | V2.4 (Jupiter)
+} ENGINE_VERSION;
+
+//--- LithTech V1.0
+typedef enum <uint> {
+    DTX_ALPHA_MASKS     = 1<<1, // This DTX has alpha masks.
+    DTX_SECTIONS_FIXED  = 1<<3, // Compatibility related.
+    DTX_DONT_MAP_MASTER = 1<<5, // Don't map to the master palette.
+} ENGINE_FLAGS_V1;
+
+typedef enum <ushort> {
+    NOLIGHT = 0,
+    LIGHT = 1
+} LIGHT_FLAG;
+
+typedef struct { ubyte A, R, G, B; } COLOR;
+
+//--- LithTech V2, 2.2 and 2.4
+typedef enum <uint> {
+    DTX_FULLBRITE     = 1<<0,  // This DTX has fullbrite (fullbright) colors.
+    DTX_PREFER16BIT   = 1<<1,  // Use 16-bit, Even if in 32-bit mode.
+    DTX_MIPSALLOCED   = 1<<2,  // Used to make some of the tools stuff easier... This means each TextureMipData has its texture data allocated.
+    DTX_SECTIONSFIXED = 1<<3,  // The sections count was screwed up originally. This flag is set in all the textures from now on when the count is fixed.
+    DTX_NOSYSCACHE    = 1<<6,  // Tells it to not put the texture in the texture cache list.
+    DTX_PREFER4444    = 1<<7,  // If in 16-bit mode, Use a 4444 texture for this.
+    DTX_PREFER5551    = 1<<8,  // Use 5551 if 16-bit.
+    DTX_32BITSSYSCOPY = 1<<9,  // If there is a sys copy - Don't convert it to device specific format (Keep it 32-bit).
+    DTX_CUBEMAP       = 1<<10, // Cube environment map. +X is stored in the normal data area, (-X, +Y, -Y, +Z, -Z) are stored in their own section
+    DTX_BUMPMAP       = 1<<11, // Bump mapped texture, This has 8 bit U and V components for the bump normal
+    DTX_LUMBUMPMAP    = 1<<12  // Bump mapped texture with luminance, This has 8 bits for luminance, U and V
+} ENGINE_FLAGS_V2;
+
+typedef enum <ubyte> {
+    UNKNOWN  = 0,
+    RGBA8888 = 3,
+    DXT1     = 4,
+    DXT3     = 5,
+    DXT5     = 6
+} IMAGE_FORMAT;
+
+//------------------------------------------------------------------------------------
+
+typedef struct {
+    uint resourceType  <name="Resource Type", comment="Always 0 for DTX">;
+    ENGINE_VERSION resourceVersion <name="Resource Version">;
+    ushort imageWidth  <name="Image Width",  comment="1024 is the limit">;
+    ushort imageHeight <name="Image Height", comment="1024 is the limit">;
+    ushort mipMapCount <name="Image Mip Map Count", comment="8 is the limit">;
+    if (resourceVersion == TALON_JUPITER) {
+        ushort numSections <name="Section Count", comment="Count of extra data blocks at end of file">;
+        ENGINE_FLAGS_V2 engineFlags <name="Engine Flags">;
+        uint surfaceFlags <name="Surface Flags", comment="Varies per game">;
+        ubyte textureGroup <name="Texture Group">;
+        ubyte mipMapsToUse <name="Mip Maps to Use">;
+        IMAGE_FORMAT imageFormat <name="Image Format">;
+        ubyte nonS3TCOffset   <comment="Fallback mip map offset for old hardware">;
+        ubyte uiMipmapOffset  <name="DEdit | World Edit UI Mip Map Offset">;
+        ubyte texturePriority <name="Texture Priority", comment="Texture management weight">;
+        float detailScale     <name="DEdit | World Edit Detail Scale", comment="Engine adds 1.0f automatically to the stored value">;
+        short detailAngle     <name="DEdit | World Edit Detail Angle", comment="In degrees">;
+        char commandString[128] <name="Command String", comment="Editor / Material Commands">;
+    }
+    else {
+        LIGHT_FLAG lightFlag <name="Light Flag">;
+        ENGINE_FLAGS_V1 engineFlags <name="Engine Flags">;
+        uint surfaceFlags  <name="Surface Flags", comment="Varies per game">;
+        ubyte textureGroup <name="Texture Group">;
+        ubyte mipMapsToUse <name="Mip Maps to Use">;
+        ubyte alphaCutoff  <name="Alpha Cutoff", comment="From 128 to 255">;
+        ubyte alphaAverage <name="Alpha Average">;
+        byte  Unknown[16];
+    }
+} Header <name="Header", read=Str("Image Dimensions: %ux%u | %u Mip Maps", this.imageWidth, this.imageHeight, this.mipMapCount)>;
+
+//------------------------------------------------------------------------------------
+
+struct {
+    Header header;
+    if (header.resourceVersion != TALON_JUPITER) COLOR Palette[256] <name="Color Palette">;
+} DTX <name="Monolith Productions LithTech .DTX Texture File">;
+
+//------------------------------------------------------------------------------------

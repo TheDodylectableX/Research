@@ -15,7 +15,7 @@ typedef struct {
     float Version; // Why a float????
     ushort FileCount <name="File Count">;
     ushort Unknown;
-} Header <name="Header", read=Str("GMX Version %f | %d Files", this.Version, this.FileCount)>;
+} Header <name="Header", read=Str("GMX Version %f | %u Files", this.Version, this.FileCount)>;
 
 typedef struct {
     uint FileNameHash <name="File Name Hash", format=hex>;
@@ -26,7 +26,7 @@ typedef struct {
     FSeek(FileOffset + 2048);
     if (FileSize > 0) byte FileData[FileSize] <name="File Data">;
     FSeek(currentPosition);
-} File <name="File", read=Str("File Name Hash: 0x%X | File Offset: %d | File Size: %d", this.FileNameHash, this.FileOffset + 2048, this.FileSize)>;
+} File <name="File", read=Str("File Name Hash: 0x%X | File Offset: %u | File Size: %u bytes", this.FileNameHash, this.FileOffset + 2048, this.FileSize)>;
 
 //---------------------------------------------------------------------------------------
 

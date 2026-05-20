@@ -1,0 +1,102 @@
+//-------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: SKEL.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Harmonix Music Systems' Forge Engine skeletons
+//  Category: Armatures / Skeletons
+// File Mask: *.skel_pc | *.skel_ps4
+//  ID Bytes: 01 00 00 00
+//   History: 
+//-------------------------------------------------------------------------------
+
+// boneCount counts only the bones defined in this file. Parent / full skeleton indices reference a larger shared character skeleton not contained here.
+// The SecB2 traversal array has (boneCount + 1) entries; The extra entry is a sentinel / root marker.
+
+LittleEndian();
+#include "../Common.bt"
+local uint i <hidden=true>;
+local uint maxParent <hidden=true> = 0;
+
+//-------------------------------------------------------------------------------
+
+typedef struct {
+    VEC4F Quaternions;
+    VEC3F Scale, Transformations;
+    VEC3F Unknown <comment="Always 1.0">;
+} BoneTransform;
+
+typedef struct { VEC4F Row1 <name="Row 1">, Row2 <name="Row 2">, Row3 <name="Row 3">; } Matrices;
+// These are the world-space transforms for each bone, Inverse bind-pose matrices expressed in world space relative to the rig's root.
+
+//-------------------------------------------------------------------------------
+
+typedef struct {
+    uint Version;
+    String sourceFilePath <name="Source File Path">;
+    uint floatSize <name="Float Size", comment="Always 4, likely sizeof(float) - Also used as a stride/version marker.">;
+    uint boneCount <name="Bone Count", comment="Number of bones defined in this file (may be a subset of the full rig)">;
+    FSkip(8); // Reserved
+} Header <name="Header", read=Str("Source Asset: %s | %u Bones", this.sourceFilePath.ActualString, this.boneCount)>;
+
+// PARENT INDEX ARRAY: One entry per bone in this file. Each value is the index of that bone's PARENT in the full shared character skeleton
+// And not this file's local bone list. Values can exceed boneCount because they reference the broader rig.
+
+typedef struct { uint parentIndex[header.boneCount] <comment="Parent bone index in the full character skeleton">; } ParentIndexArray;
+
+// BONE MAPPING
+// Two logical arrays stored back-to-back (no separator):
+//
+//   Bone Index [X entries]:
+//     For each local bone (i), the index of bone (i) in the full character skeleton's bone list, Values may be large.
+//
+//   DFS Evaluation Order [boneCount+1 entries]:
+//     DFS (depth-first) evaluation order for this file's local bone subset, Values are from 0 to total bone count.
+//
+// Combine all of that and they give the engine the information it needs to look up this asset's bones inside the full animated skeleton and evaluate them in dependency order.
+
+typedef struct {
+    // First X entries = full skeleton indices
+    uint boneIndex[header.boneCount] <name="Bone Index", comment="Index of each local bone inside the full character skeleton bone list">;
+    // Next boneCount+1 entries = DFS evaluation order
+    uint evaluationOrder[header.boneCount + 1] <name="DFS Evaluation Order", comment="DFS evaluation order for local bones (0..boneCount)">;
+} BoneMapping;
+
+typedef struct { BoneTransform XForm[header.boneCount] <optimize=false>; } LocalTransformArray;
+
+typedef struct {
+    uint matrixCount <name="Bone Matrix Count", comment="Always equals boneCount">;
+    Matrices Matrix[matrixCount] <optimize=false>;
+} WorldMatrixArray;
+
+typedef struct {
+    uint nameCount <name="Bone Name Count", comment="Always equals boneCount">;
+    String Name[nameCount] <name="Bone Name", optimize=false>;
+} BoneNameArray;
+
+typedef struct {
+    VEC4F identityQuat1 <name="Identity Quaternion 1">;
+    VEC4F identityQuat2 <name="Identity Quaternion 2">;
+    VEC4F identityQuat3 <name="Identity Quaternion 3">;
+    VEC4F identityQuat4 <name="Identity Quaternion 4">;
+    VEC3F worldUpVector <name="World Up Vector", comment="Y-Up World">;
+    VEC3F worldForwardVector <name="World Forward Vector", comment="Negative-X Forward (≈)">;
+} Footer <name="Footer">;
+
+//-------------------------------------------------------------------------------
+
+struct {
+    Header header;
+    ParentIndexArray parentIndices <name="Parent Indices">;
+    for (i = 0; i < header.boneCount; i++) {
+        if (parentIndices.parentIndex[i] > maxParent) maxParent = parentIndices.parentIndex[i];
+    }
+    BoneMapping boneMapping <name="Bone Mapping">;
+    LocalTransformArray localTransforms <name="Local Transforms">;
+    WorldMatrixArray worldMatrices <name="World Matrices">;
+    BoneNameArray boneNames <name="Bone Names">;
+    Footer footer;
+} SKEL <name="Harmonix Forge Engine Skeleton File">;
+
+//-------------------------------------------------------------------------------

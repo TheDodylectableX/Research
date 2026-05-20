@@ -46,10 +46,10 @@ typedef struct {
     uint Version <comment="Always 6">;
     PLATFORM_SUBTYPE Platform;
 
-    uint Constant_008 <comment="Always 1">;
-    uint Constant_00C <comment="Always 1">;
+    uint Constant_008 <comment="One">;
+    uint Constant_00C <comment="One">;
     uint Constant_010 <comment="Zero">;
-    uint Unknown_014  <comment="3 when it's a BC5 image, 0 if BC1 or BC3, 6 if it's a PBR BC5 image">;
+    uint Unknown_014  <comment="3 when it's a BC5 image | 0 if BC1 or BC3 | 6 if it's a PBR BC5 image">; // Some flag? The PBR images have some alpha related flag to them
     uint Constant_018 <comment="Zero">;
     uint Constant_01C <comment="Zero">;
     uint Constant_020 <comment="Zero">;
@@ -61,21 +61,21 @@ typedef struct {
     uint Constant_038 <comment="Zero">;
     uint Constant_03C <comment="Zero">;
     uint Constant_040 <comment="Zero">;
-    uint Unknown_044  <comment="3 when it's a BC5 image, 0 if BC1 or BC3, 6 if it's a PBR BC5 image">;
-    uint Unknown_048  <comment="3 when it's BC3 image, 0 if BC5 and 1 if BC1">;
-    uint Unknown_04C  <comment="1 when it's a BC5 or BC1 image, 3 if BC3">;
+    uint Unknown_044  <comment="3 when it's a BC5 image | 0 if BC1 or BC3 | 6 if it's a PBR BC5 image">; // Some flag? The PBR images have some alpha related flag to them
+    uint Unknown_048  <comment="3 when it's BC3 image | 0 if BC5 | 1 if BC1">;
+    uint Unknown_04C  <comment="1 when it's a BC5 or BC1 image | 3 if BC3">;
     uint Constant_050 <comment="Zero">;
-    uint Unknown_054  <comment="1 when it's a BC5 image, 2 if BC1 or BC3">;
-    uint Constant_058;
-    uint Constant_05C;
+    uint Unknown_054  <comment="1 when it's a BC5 image | 2 if BC1 or BC3">;
+    uint Constant_058 <comment="Two">;
+    uint Constant_05C <comment="Two">;
     uint Constant_060 <comment="Zero">;
-    uint Constant_064;
+    uint Constant_064 <comment="Zero">;
 
     IMAGE_DIMENSION_TYPE imageDimensionType <name="Image Dimension Type">;
 
     uint Constant_06C <comment="Zero">;
 
-    uint mipFilterFlags <name="Mip Map Filter Flags", comment="Mip filter flags (7 in observed samples)">;
+    uint mipFilterFlags <name="Mip Map Filter Flags", comment="7 in observed samples, seems to be constant">;
 
     uint Constant_074 <comment="Zero">;
 

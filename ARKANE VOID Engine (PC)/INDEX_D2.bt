@@ -16,28 +16,29 @@
 typedef struct {
     BigEndian();
     ubyte INDEXType <name="INDEX Type", comment="4 = Index / 5 = Resources">;
-    char Magic[3]   <name="Magic", comment="Always SER">;
+    char Magic[3]   <name="Magic",      comment="Always SER">;
     uint INDEXSize  <name="INDEX Size", comment="Size of this file minus 32 bytes">;
     FSkip(24); // Reserved
-    uint FileCount <name="File Count">;
-} Header <name="Header", comment="The header of this index", read=Str("INDEX Type: %d | INDEX Magic: %s | INDEX Size: %d | File Count: %d Files", this.INDEXType, this.Magic, this.INDEXSize, this.FileCount)>;
+    uint FileCount  <name="File Count">;
+} Header <name="Header", read=Str("INDEX Type: %u | INDEX Magic: %s | INDEX Size: %u | File Count: %u Files", this.INDEXType, this.Magic, this.INDEXSize, this.FileCount)>;
 
 typedef struct {
     BigEndian();
-    uint ResourceIndex;
+    uint ResourceIndex <name="Resource Index">;
     LittleEndian();
-    String FileType <name="File Type", comment="What type of file this is">;
+    String ResourceType            <name="File Type">;
     String ResourceListingUncooked <name="File Listing (Uncooked)", comment="Uncooked file listing, Referenced in DECLs and the files themselves">;
-    String ResourceListingCooked <name="File Listing (Cooked)", comment="Cooked file listing, the file's actual path">;
-    BigEndian(); // File metadata is Big Endian
-    uint64 FileOffset <name="Primary File Offset", comment="Where the file is located">;
-    uint FileSizeUncompressed <name="File Size (Uncompressed)", comment="Uncompressed">;
-    uint FileSizeCompressed <name="File Size (Compressed)", comment="ZLib">;
-    FSkip(4); // Padding
-    uint PrimaryFileFlags <name="File Flags", comment="File Flags">;
-    ushort SecondaryFileFlags;
+    String ResourceListingCooked   <name="File Listing (Cooked)",   comment="Cooked file listing, the file's actual path">;
+    BigEndian();
+    uint64 FileOffset              <name="File Offset", comment="Absolute">;
+    uint FileSizeUncompressed      <name="File Size (Uncompressed)">;
+    uint FileSizeCompressed        <name="File Size (Compressed)", comment="ZLib">;
+    FSkip(4); // Reserved
+    uint PrimaryFileFlags          <name="Primary File Flags">;
+    ushort SecondaryFileFlags      <name="Secondary File Flags">;
     LittleEndian();
-} Files <read=this.ResourceListingCooked.ActualString, comment="INDEX File Listing", name="INDEX File Listing">;
+} Files <name="File Entry", read=Str("%s | %s | File Offset: %u | File Size (Uncompressed): %u bytes",
+                                     this.ResourceType.ActualString, this.ResourceListingCooked.ActualString, this.FileOffset, this.FileSizeUncompressed)>;
 
 //----------------------------------------------------------------------------------------
 

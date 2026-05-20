@@ -15,22 +15,22 @@
 // On the other hand SPAK archives file names are fixed to 120 chars and must divide the file table size by 128 instead
 
 typedef struct {
-    char Magic[4]        <name="Magic", comment="PACK = QUAKE 1 & 2 etc. | SPAK = SiN">;
+    char Magic[4]        <name="Magic",             comment="PACK = QUAKE 1 & 2 etc. | SPAK = SiN">;
     uint FileTableOffset <name="File Table Offset", comment="Where the file listings start">;
-    uint FileTableSize   <name="File Table Size", comment="Divide by 64 to get the amount of files in the archive if it's PACK, 128 if it's an SPAK archive">;
-} Header <name="Header", read=Str("Archive Magic: %s | File Table: %d | File Table Offset: %d", this.Magic, this.FileTableSize, this.FileTableOffset)>;
+    uint FileTableSize   <name="File Table Size",   comment="Divide by 64 to get the amount of files in the archive if it's PACK, 128 if it's an SPAK archive">;
+} Header <name="Header", read=Str("Archive Magic: %s | File Table: %u | File Table Offset: %u", this.Magic, this.FileTableSize, this.FileTableOffset)>;
 
 typedef struct {
     if (header.Magic == "PACK") char FileName[56] <name="File Name", comment="Fixed to 56 bytes">;
     else char FileName[120] <name="File Name", comment="Fixed to 120 bytes">;
-    uint FileOffset <name="File Offset", comment="Where the file is located in the archive">;
-    uint FileSize   <name="File Size", comment="The size of the file in the archive">;
+    uint FileOffset <name="File Offset", comment="Relative (Right after the header)">;
+    uint FileSize <name="File Size">;
 
     local uint64 currentPosition <hidden=true> = FTell();
     FSeek(FileOffset);
     byte FileData[FileSize] <name="File Data">;
     FSeek(currentPosition);
-} FileEntry <name="Files", read=Str("File: %s | File Size: %d bytes | File Offset: %d", this.FileName, this.FileSize, this.FileOffset)>;
+} FileEntry <name="Files", read=Str("File: %s | File Size: %u bytes | File Offset: %u", this.FileName, this.FileSize, this.FileOffset)>;
 
 //-------------------------------------------------------
 

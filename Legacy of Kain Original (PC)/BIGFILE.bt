@@ -17,7 +17,7 @@ LittleEndian();
 const string Game <hidden=true> = "SR1";
 
 struct {
-    if (Game == "SR1" || Game == "SR2") { uint FileCount <name="File Count">; }
+    if (Game == "SR1" || Game == "SR2") uint FileCount <name="File Count">;
     // ----------------------------
     // Legacy of Kain: Soul Reaver
     // ----------------------------
@@ -32,7 +32,7 @@ struct {
             FSeek(FileOffset);
             byte FileData[FileSize] <name="File Data">;
             FSeek(currentPosition);
-        } FileListing[FileCount] <read=Str("File Hash: 0x%X | File Size: %d | File Offset: %d | File Type: %s", this.FileHash, this.FileSize, this.FileOffset, this.FileType), optimize=false>;
+        } FileListing[FileCount] <read=Str("File Hash: 0x%X | File Size: %u | File Offset: %u | File Type: %s", this.FileHash, this.FileSize, this.FileOffset, this.FileType), optimize=false>;
     }
     // -------------------------------
     // Legacy of Kain: Soul Reaver II
@@ -48,7 +48,7 @@ struct {
             FSeek(FileOffset);
             byte FileData[FileSize] <name="File Data">;
             FSeek(currentPosition);
-        } FileListing[FileCount] <read=Str("File Size: %d | File Offset: %d", this.FileSize, this.FileOffset), optimize=false>;
+        } FileListing[FileCount] <read=Str("File Size: %u | File Offset: %u", this.FileSize, this.FileOffset), optimize=false>;
     }
     // --------------------------------------
     // Legacy of Kain: Defiance (Remastered)
@@ -70,7 +70,7 @@ struct {
                 ubyte FileData[ActualSize] <name="File Data">;
                 FSeek(currentPosition);
             }
-        } FileListing[Header.FileCount] <read=Str("File Size: %d | File Size Compressed: %u | File Offset: %u", this.FileSize, this.FileSizeCompressed, this.FileOffset), optimize=false>;
+        } FileListing[Header.FileCount] <read=Str("File Size: %u | File Size Compressed: %u | File Offset: %u", this.FileSize, this.FileSizeCompressed, this.FileOffset), optimize=false>;
     }
 } BIGFILE <name="Legacy of Kain: Soul Reaver I-II | Defiance (Remastered) BIGFILE(.X64).DAT Archive">;
 

@@ -32,7 +32,7 @@ typedef struct {
     ushort imageWidth <name="Image Width">, imageHeight <name="Image Height">;
     uint   imageSize <name="Image Size">, imageFlags <name="Image Flags">;
     byte   imageData[imageSize] <name="Image Data">;
-} Image <name="Images", read=Str("Image ID: %d | Image Format: %s | Image Dimensions: %dx%d | Image Size: %d bytes", this.imageID, EnumToString(this.imageFormat), this.imageWidth, this.imageHeight, this.imageSize)>;
+} Image <name="Images", read=Str("Image ID: %u | Image Format: %s | Image Dimensions: %ux%u | Image Size: %u bytes", this.imageID, EnumToString(this.imageFormat), this.imageWidth, this.imageHeight, this.imageSize)>;
 
 //-------------------------------------------------------------------------------------------------------------
 

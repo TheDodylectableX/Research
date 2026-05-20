@@ -1,449 +1,164 @@
-//-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------------
 //--- 010 Editor Binary Template
 //
 //      File: ARC.bt
-//   Authors: Dodylectable (Making the template / Finding out a few new hashes) - Che (DMC4 non-SE format hashes) - Rick Gibbed (DD / RE5 hashes) - Many others for format hashes
-//   Version: 1.9
-//   Purpose: Reverse engineering Capcom games' .ARC archive format from the MT Framework engine
+//   Authors: Dodylectable (Finding new hashes and making the template)
+//   Credits: Rick Gibbed (DD / RE5 hashes and initial research) | Che (DMC4 Non-SE format hashes)
+//            Many Others: Various Format Hashes
+//   Version: 2.0
+//   Purpose: Reverse engineering CAPCOM's MT Framework engine archive format
 //  Category: Archives
 // File Mask: *.ARC
-//  ID Bytes: 41 52 43 00
+//  ID Bytes: 41 52 43 00 | 00 43 52 41
 //   History: 
-//-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-// Files are ZLib Compressed
-// File Entires are fixed to 80 bytes
-// File Listings are fixed to 64 bytes
-// Extensions are stored in a CRC32 checksum
-
-typedef struct
-{
-    char Magic[4] <comment="Archive magic, always ARC", name="Archive Magic">;
-    ushort Version <comment="Archive version", name="Archive Version">;
-    ushort FileCount <comment="File count", name="Archive File Count">;
-} Header <comment="The archive's header", name="Archive Header", read=Str("(ARC Version: %d | %d Files)", this.Version, this.FileCount)>;
-
-typedef struct
-{
-    char FileListing[64] <comment="File listing, always 64 bytes long", name="File Listing">;
-    uint FormatHash <format=hex, comment="File format extension hash (CRC32)", name="File Format Extension Hash (CRC32)">;
-    uint CompressedFileSize <comment="File's compressed filesize", name="Compressed File Size">;
-    ubyte Unk[3] <comment="No idea what's this">;
-    ubyte FileFlags <comment="File Flags", name="File Flags">;
-    uint FileOffset <comment="Where the file is located in the file", name="File Offset">;
-} Files <name="Files", read=ReadFiles>;
-
-string ReadFiles(Files &entry) // READ HASHES AND RETURN THEM AS THEIR ORIGINAL FORMAT EXTENSIONS
-{
-    switch (entry.FormatHash)
-    {
-        case 0x241F5DEB:
-        case 0x3CAD8076: // DEVIL MAY CRY 4 (NON-SPECIAL EDITION) HASH
-            return ".tex - Texture";
-            break;
-            
-        case 0x2749C8A8:
-            return ".mrl - Material";
-            break;
-            
-        case 0x76820D81:
-        case 0x139EE51D: // DEVIL MAY CRY 4 (NON-SPECIAL EDITION) HASH
-            return ".lmt - Motion List";
-            break;
-
-        case 0x358012E8:
-            return ".vib - Vibration";
-            break;
-            
-        case 0x6D5AE854:
-            return ".efl - Effect List";
-            break;
-            
-        case 0x4E397417:
-            return ".ean - Effect Animation";
-            break;
-            
-        case 0x4C0DB839:
-            return ".sdl - Scheduler";
-            break;
-            
-        case 0x58A15856:
-        case 0x1041BD9E: // DEVIL MAY CRY 4 (NON-SPECIAL EDITION) HASH
-            return ".mod - Model";
-            break;
-
-        case 0x36E29465:
-            return ".hkx - Havok Collision";
-            break;
-
-        case 0x51FC779F:
-            return ".sbc - Collision";
-            break;
-
-        case 0x4EF19843:
-            return ".nav - Navigation Mesh";
-            break;
-
-        case 0x3E363245: // ULTIMATE MARVEL VS. CAPCOM 3 HASH
-            return ".chn - Chain";
-            break;
-
-        case 0x65B275E5:
-            return ".sce - Scenario";
-            break;
-
-        case 0x1BCC4966:
-            return ".srq - Sound Request";
-            break;
-
-        case 0x357EF6D4: // ULTIMATE MARVEL VS. CAPCOM 3 HASH
-            return ".lrp - ????";
-            break;
-
-        case 0x326F732E: // ULTIMATE MARVEL VS. CAPCOM 3 HASH
-            return ".cst - ????";
-            break;
-
-        case 0x26E7FF:
-            return ".ccl - Chain Collision";
-            break;
-
-        case 0x5A7E5D8A:
-            return ".anm - Animation";
-            break;
-
-        case 0x448BBDD4:
-            return ".gem - ????";
-            break;
-
-        case 0x9A64A8: // ULTIMATE MARVEL VS. CAPCOM 3 HASH
-            return ".lmcm - Maya Camera List (XML Camera Info?)";
-            break;
-
-        case 0x724DF879: // ULTIMATE MARVEL VS. CAPCOM 3 HASH
-            return ".xsew - Sound Source (OGG Vorbis)";
-            break;
-
-        case 0x15D782FB: // ULTIMATE MARVEL VS. CAPCOM 3 HASH
-            return ".sbkr - Sound Bank";
-            break;
-
-        case 0x535D969F:
-            return ".ctc - ????";
-            break;
-
-        case 0x2282360D:
-            return ".jex - Joint EX";
-            break;
-
-        case 0x2D12E086:
-            return ".srd - Sound (Random)";
-            break;
-
-        case 0x7E33A16C:
-            return ".spc - Sound Package";
-            break;
-
-        case 0x4CA26828:
-            return ".bmse - Sound Motion";
-            break;
-
-        case 0x7437CCE:
-            return ".base - Sound Attributes";
-            break;
-
-        case 0x12191BA1:
-            return ".epv - Effect Provider";
-            break;
-
-        case 0x27F3C33D:
-            return ".dfd - ????";
-            break;
-
-        case 0x652A93A4:
-            return ".atk - ????";
-            break;
-
-        case 0x470745CB:
-            return ".txt - Text Document?";
-            break;
-
-        case 0x4EA4E09A:
-            return ".col - ????";
-            break;
-
-        case 0x21034C90:
-            return ".arcs - Archive (Same as ARC)";
-            break;
-
-        case 0x5A7FEA62:
-            return ".ik - Inverse Kinematics Related?";
-            break;
-
-        case 0x7808EA10:
-            return ".rtex - Render Target Texture";
-            break;
-
-        case 0x39C52040:
-            return ".lcm - Camera List";
-            break;
-
-        case 0x66B45610:
-            return ".fsm - AI FSM";
-            break;
-
-        case 0x2C4666D1:
-            return ".smh - ????";
-            break;
-
-        case 0x6A5CDD23:
-            return ".occ - ????";
-            break;
-
-        case 0x437BCF2:
-            return ".grw - Effect (Grass Wind)";
-            break;
-
-        case 0x2833703:
-            return ".efs - Effect Strip";
-            break;
-
-        case 0x276DE8B7:
-            return ".e2d - Effect (2D)";
-            break;
-
-        case 0x39D71F2:
-            return ".rvt - Sound Related?";
-            break;
-
-        case 0x266E8A91:
-            return ".lku - Link Unit";
-            break;
-
-        case 0x167DBBFF:
-            return ".stq - Sound Stream Request";
-            break;
-
-        case 0x5F36B659:
-            return ".way - AI Waypoint";
-            break;
-
-        case 0x15302EF4:
-            return ".lot - Layout";
-            break;
-
-        case 0x1B520B68:
-            return ".zon - Zone";
-            break;
-
-        case 0x272B80EA:
-            return ".prp - Prop Parameter";
-            break;
-
-        case 0x1ED12F1B:
-            return ".glp - Goal Position";
-            break;
-
-        case 0x5802B3FF:
-            return ".ahc - AH Camera";
-            break;
-
-        case 0x285A13D9:
-            return ".vzo - ????";
-            break;
-
-        case 0x2A4F96A8:
-            return ".rbd - Rigid Body";
-            break;
-
-        case 0x3B5C7FD3: // RESIDENT EVIL 6 HASH
-            return ".ida - ????";
-            break;
-
-        case 0x296BD0A6:
-            return ".hgm - ????";
-            break;
-
-        case 0x6E45FABB:
-            return ".atk - ????";
-            break;
-
-        case 0x253F147:
-            return ".hit - ????";
-            break;
-
-        case 0x35BDD173:
-            return ".poa - ????";
-            break;
-
-        case 0x14EA8095:
-            return ".cos - ????";
-            break;
-
-        case 0x33046CD5:
-            return ".qcm - ????";
-            break;
-
-        case 0x1AADF7B7:
-            return ".cms - ????";
-            break;
-
-        case 0xA4280D9:
-            return ".shd - ????";
-            break;
-
-        case 0x2F4E7041:
-            return ".sgt - ????";
-            break;
-
-        case 0x671F21DA:
-            return ".stp - Start Position Coordinates";
-            break;
-
-        case 0x54DC440A:
-            return ".msl - Message Serial";
-            break;
-
-        case 0x6A9197ED:
-            return ".sst - Sound Related?";
-            break;
-
-        case 0x46FB08BA:
-            return ".bmt - ????";
-            break;
-
-        case 0x2C2DE8CA:
-        case 0x1EFB1B67: // RESIDENT EVIL 5 HASH
-            return ".adh - Adhesion";
-            break;
-
-        case 0xECD7DF4:
-            return ".scs - Sound Related?";
-            break;
-
-        case 0x315E81F:
-            return ".sds - Sound Related?";
-            break;
-
-        case 0x232E228C:
-            return ".rev - Sound Related?";
-            break;
-
-        case 0x2B40AE8F:
-            return ".equ - Sound Related?";
-            break;
-
-        case 0x30FC745F:
-            return ".smx - Sound Related?";
-            break;
-
-        case 0x49B5A885:
-            return ".ssc - Sound Related?";
-            break;
-
-        case 0x2D462600:
-            return ".gfd - GUI Font";
-            break;
-
-        case 0x22948394:
-            return ".gui - GUI";
-            break;
-
-        case 0x07F768AF:
-            return ".gii - GUI Icon";
-            break;
-
-        case 0x4323D83A:
-            return ".stex - Scene Texture";
-            break;
-
-        case 0xDADAB62:
-            return ".oba - Object Related?";
-            break;
-
-        case 0x2DC54131:
-            return ".cdf - Cloth";
-            break;
-
-        case 0x758B2EB7:
-            return ".cef - Common Effect";
-            break;
-
-        case 0x1BA81D3C:
-            return ".nck - Neck";
-            break;
-
-        case 0x7A098625:
-            return ".cwc - ????";
-            break;
-
-        case 0x1CC22F91:
-            return ".epl - ????";
-            break;
-
-        case 0x1A5444D9:
-            return ".cad - ????";
-            break;
-
-        case 0x65D3AC8E:
-            return ".resmap - ????";
-            break;
-
-        case 0x13CFA2FA:
-            return ".swm - ????";
-            break;
-
-        case 0x4E2FEF36:
-            return ".mtg - Model Montage";
-            break;
-
-        case 0x5898749C:
-            return ".bgm - BGM Map";
-            break;
-
-        case 0x557ECC08:
-            return ".aef - AH Effect";
-            break;
-
-        case 0x4D894D5D:
-            return ".cmi - Cube Map Interp";
-            break;
-
-        case 0x38F66FC3:
-            return ".seg - Sound SE Generator";
-            break;
-
-        case 0x60DD1B16:
-            return ".lsp - Layout SPR";
-            break;
-
-        case 0x19A59A91:
-            return ".lnk - Light Linker";
-            break;
-
-        case 0x5204D557:
-            return ".shp - Shape";
-            break;
-
-        case 0x60524FBB:
-            return ".shw - Shape Weight";
-            break;
-
-        case 0x754B82B4:
-            return ".ahs - Area Hit Shape";
-            break;
-
-        default:
-            return "???? - Unknown Format";
-            break;
+//-------------------------------------------------------------------------------------------------
+
+// Files are ZLib Compressed for PC/PS3/Other platforms meanwhile Xbox 360 uses XMemCompress. (LZX)
+// File entries are 80 bytes long, File names being 64 characters long.
+// File extensions are stored in a CRC32 checksum.
+
+//-------------------------------------------------------------------------------------------------
+
+typedef enum <uint> {
+    ARCHIVE               = 0x21034C90, // .arcs
+    TEXT_DOCUMENT         = 0x470745CB, // .txt
+    TEXTURE               = 0x241F5DEB, // .tex
+    TEXTURE_UMVC3         = 0x3CAD8076, // .tex
+    TEXTURE_RENDER_TARGET = 0x7808EA10, // .rtex
+    TEXTURE_SCENE         = 0x4323D83A, // .stex
+    MATERIAL              = 0x2749C8A8, // .mrl
+    MOTION_LIST_DMC4      = 0x76820D81, // .lmt
+    MOTION_LIST           = 0x139EE51D, // .lmt
+    VIBRATION             = 0x358012E8, // .vib
+    SCHEDULER             = 0x4C0DB839, // .sdl
+    MODEL                 = 0x1041BD9E, // .mod
+    MODEL_DMC4            = 0x58A15856, // .mod
+    MODEL_MONTAGE         = 0x4E2FEF36, // .mtg
+    HAVOK_COLLISION       = 0x36E29465, // .hkx
+    COLLISION             = 0x51FC779F, // .sbc
+    CHAIN_COLLISION       = 0x26E7FF,   // .ccl
+    HIT_HITBOX            = 0x253F147,  // .hit
+    CHAIN_UMVC3           = 0x3E363245, // .chn
+    CLOTH                 = 0x2DC54131, // .cdf
+    SCENARIO              = 0x65B275E5, // .sce
+    LRP_UNKNOWN_UMVC3     = 0x357EF6D4, // .lrp
+    CST_UNKNOWN_UMVC3     = 0x326F732E, // .cst
+    ANIMATION             = 0x5A7E5D8A, // .anm
+    GEM_UNKNOWN           = 0x448BBDD4, // .gem
+    CTC_UNKNOWN           = 0x535D969F, // .ctc
+    SOUND_REQUEST         = 0x1BCC4966, // .srq
+    SOUND_SOURCE_OGG      = 0x724DF879, // .xsew
+    SOUND_BANK            = 0x15D782FB, // .sbkr
+    SOUND_RANDOM          = 0x2D12E086, // .srd
+    SOUND_PACKAGE         = 0x7E33A16C, // .spc
+    SOUND_MOTION          = 0x4CA26828, // .bmse
+    SOUND_ATTRIBUTES      = 0x7437CCE,  // .base
+    SOUND_STREAM_REQUEST  = 0x167DBBFF, // .stq
+    SOUND_SE_GENERATOR    = 0x38F66FC3, // .seg
+    RVT_SOUND_UNKNOWN     = 0x39D71F2,  // .rvt
+    SST_SOUND_UNKNOWN     = 0x6A9197ED, // .sst
+    SCS_SOUND_UNKNOWN     = 0xECD7DF4,  // .scs
+    SDS_SOUND_UNKNOWN     = 0x315E81F,  // .sds
+    REV_SOUND_UNKNOWN     = 0x232E228C, // .rev
+    EQU_SOUND_UNKNOWN     = 0x2B40AE8F, // .equ
+    SMX_SOUND_UNKNOWN     = 0x30FC745F, // .smx
+    SSC_SOUND_UNKNOWN     = 0x49B5A885, // .ssc
+    DFD_UNKNOWN           = 0x27F3C33D, // .dfd
+    ATK_UNKNOWN_1         = 0x652A93A4, // .atk
+    ATK_UNKNOWN_2         = 0x6E45FABB, // .atk
+    COL_UNKNOWN           = 0x4EA4E09A, // .col
+    INVERSE_KINEMATICS    = 0x5A7FEA62, // .ik
+    JOINT_EX              = 0x2282360D, // .jex
+    CAMERA_LIST           = 0x39C52040, // .lcm
+    CAMERA_LIST_MAYA      = 0x9A64A8,   // .lmcm
+    CAMERA_AH             = 0x5802B3FF, // .ahc
+    NAVIGATION_MESH       = 0x4EF19843, // .nav
+    AI_FSM                = 0x66B45610, // .fsm
+    SMH_UNKNOWN           = 0x2C4666D1, // .smh
+    OCC_UNKNOWN           = 0x6A5CDD23, // .occ
+    EFFECT_PROVIDER       = 0x12191BA1, // .epv
+    EFFECT_LIST           = 0x6D5AE854, // .efl
+    EFFECT_ANIMATION      = 0x4E397417, // .ean
+    EFFECT_GRASS_WIND     = 0x437BCF2,  // .grw
+    EFFECT_STRIP          = 0x2833703,  // .efs
+    EFFECT_2D             = 0x276DE8B7, // .e2d
+    EFFECT_COMMON         = 0x758B2EB7, // .cef
+    EFFECT_AH             = 0x557ECC08, // .aef
+    LINK_UNIT             = 0x266E8A91, // .lku
+    AI_WAYPOINT           = 0x5F36B659, // .way
+    LAYOUT                = 0x15302EF4, // .lot
+    LAYOUT_SPR            = 0x60DD1B16, // .lsp
+    ZONE                  = 0x1B520B68, // .zon
+    PROP_PARAMETER        = 0x272B80EA, // .prp
+    VZO_UNKNOWN           = 0x285A13D9, // .vzo
+    RIGID_BODY            = 0x2A4F96A8, // .rbd
+    IDA_RE6               = 0x3B5C7FD3, // .ida
+    HGM_UNKNOWN           = 0x296BD0A6, // .hgm
+    POA_UNKNOWN           = 0x35BDD173, // .poa
+    COS_UNKNOWN           = 0x14EA8095, // .cos
+    QCM_UNKNOWN           = 0x33046CD5, // .qcm
+    CMS_UNKNOWN           = 0x1AADF7B7, // .cms
+    SHD_UNKNOWN           = 0xA4280D9,  // .shd
+    SGT_UNKNOWN           = 0x2F4E7041, // .sgt
+    START_POSITION        = 0x671F21DA, // .stp
+    GOAL_POSITION         = 0x1ED12F1B, // .glp
+    MESSAGE_SERIAL        = 0x54DC440A, // .msl
+    BMT_UNKNOWN           = 0x46FB08BA, // .bmt
+    ADHESION              = 0x2C2DE8CA, // .adh
+    ADHESION_RE5          = 0x1EFB1B67, // .adh
+    GUI                   = 0x22948394, // .gui
+    GUI_FONT              = 0x2D462600, // .gdf
+    GUI_ICON              = 0x07F768AF, // .gii
+    OBJECT_UNKNOWN        = 0xDADAB62,  // .oba
+    NECK                  = 0x1BA81D3C, // .nck
+    CWC_UNKNOWN           = 0x7A098625, // .cwc
+    EPL_UNKNOWN           = 0x1CC22F91, // .epl
+    CAD_UNKNOWN           = 0x1A5444D9, // .cad
+    RESMAP_UNKNOWN        = 0x65D3AC8E, // .resmap
+    SWM_UNKNOWN           = 0x13CFA2FA, // .swm
+    BGM_MAP               = 0x5898749C, // .bgm
+    CUBE_MAP_INTERPOLATOR = 0x4D894D5D, // .cmi
+    LIGHT_LINKER          = 0x19A59A91, // .lnk
+    SHAPE                 = 0x5204D557, // .shp
+    SHAPE_WEIGHT          = 0x60524FBB, // .shw
+    SHAPE_AREA_HIT        = 0x754B82B4  // .ahs
+} FORMAT_TYPE;
+
+//-------------------------------------------------------------------------------------------------
+
+typedef struct {
+    char Magic[4]    <name="Magic", comment="ARC: LE | CRA: BE">;
+    ushort Version   <name="Version">;
+    ushort FileCount <name="File Count">;
+    if (Version == 16) FSkip(4); // Reserved
+    if (Version >= 17) uint Unknown <format=hex>;
+} Header <name="Header", read=Str("ARC Version %d | %d Files", this.Version, this.FileCount)>;
+
+typedef struct {
+    char FileName[64] <name="File Name">;
+    FORMAT_TYPE FormatHash    <name="File Format Extension Hash", comment="CRC32", format=hex>;
+    uint FileSizeCompressed   <name="File Size (Compressed)",     comment="ZLib or LZX">;
+    uint FileSizeUncompressed <name="File Size (Uncompressed)",   comment="Flagged with 0x40000000">;
+    if (header.Version == 9) FORMAT_TYPE FormatHash2 <format=hex>;
+    uint FileOffset <name="File Offset", comment="Absolute">;
+
+    local uint RealUncompressedSize <hidden=true> = FileSizeUncompressed & 0x3FFFFFFF;
+    local uint RealCompressedSize   <hidden=true> = FileSizeCompressed   & 0x3FFFFFFF;
+    local uint ActualSize           <hidden=true> = (RealCompressedSize == 0) ? RealUncompressedSize : RealCompressedSize;
+    if (ActualSize > 0 && FileOffset > 0 && FileOffset < FileSize()) {
+        local uint64 CurrentPosition <hidden=true> = FTell();
+        FSeek(FileOffset);
+        byte FileData[ActualSize] <name="File Data">;
+        FSeek(CurrentPosition);
     }
-}
+} Files <name="Files", read=Str("%s | File Size: %u bytes | File Offset: %u | File Type: %s", this.FileName, this.FileSizeCompressed, this.FileOffset, EnumToString(this.FormatHash))>;
 
-typedef struct
-{
+//-------------------------------------------------------------------------------------------------
+
+struct {
     Header header;
-if (header.FileCount > 0)
-    Files files[header.FileCount] <name="Files", comment="File Entry", optimize=false>;
-} Capcom_ARC <comment="Capcom .ARC Archive", name="CAPCOM MT Framework [.ARC] Archive">;
+    if (header.Magic == "0x00435241") BigEndian(); else LittleEndian();
+    if (header.FileCount > 0) Files files[header.FileCount] <name="Files", comment="File Entry", optimize=false>;
+} ARC <name="CAPCOM MT Framework .ARC File">;
 
-Capcom_ARC file;
+//-------------------------------------------------------------------------------------------------

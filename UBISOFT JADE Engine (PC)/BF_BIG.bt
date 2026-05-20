@@ -33,7 +33,7 @@ typedef struct {
     uint HeaderSize <comment="Always 68 bytes long", name="Header Length">;
     FSkip(8); // Reserved
     uint HeaderUnkD <comment="Needs more research", name="Unknown Header Value C">;
-} Header <name="Header", read=Str("BF Version: %d | File Count: %d Files | Folder Count: %d Folders", this.Version, this.FileCount, this.FolderCount)>;
+} Header <name="Header", read=Str("BF Version: %u | File Count: %u Files | Folder Count: %u Folders", this.Version, this.FileCount, this.FolderCount)>;
 
 typedef struct {
     uint FileOffset <name="File Offset">;
@@ -53,7 +53,7 @@ typedef struct
         char UnknownChecksum[32] <name="File Checksum?", comment="Looks like some sort of checksum or key, Needs more research">;
         FSkip(4); // Reserved
     }
-} Files <name="Archive Files", comment="Archive files", read=Str("File: %s | File Size: %d bytes | File Flags: %d", this.FileListing, this.FileSize, this.FileFlags)>;
+} Files <name="Archive Files", comment="Archive files", read=Str("File: %s | File Size: %u bytes | File Flags: %u", this.FileListing, this.FileSize, this.FileFlags)>;
 
 //------------------------------------------------------------------------
 
@@ -64,6 +64,6 @@ struct
         FileOffsets fileoffsets[header.FileCount] <optimize=false, name="File Offsets">;
         while (!ReadByte()) FSkip(1); // Skip empty padding bytes 
         Files files[header.FileCount] <optimize=false, name="File Listing">;
-} BF <name="Ubisoft .BF (BIG) File">;
+} BF <name="Ubisoft JADE Engine .BF (BIG) Archive">;
 
 //------------------------------------------------------------------------
