@@ -1,0 +1,114 @@
+//-------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: TEX.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Dead Rising 2/3/4's textures
+//  Category: Images / Textures
+// File Mask: *.tex | *.hrt
+//  ID Bytes: 06 05 04 03
+//   History: 
+//-------------------------------------------------------------
+
+LittleEndian();
+local int i <hidden=true>;
+local int m <hidden=true>;
+
+typedef enum <ubyte> {
+    ARGB32     = 0,
+    BC1        = 8,
+    BC1_ALPHA  = 48,
+    BC3        = 10,
+    BC4        = 37,
+    BC5        = 38,
+    RGBA_HDR   = 39  // Found on skybox textures
+} IMAGE_FORMAT;
+
+typedef enum <uint> {
+    TEXTURE_HIGH_RESOLUTION = 4, // Found on DR3
+    TEXTURE = 16
+} ASSET_TYPE;
+
+//---------------------------------------------------------
+
+typedef struct {
+    uint Magic <format=hex>;
+    uint dataStartOffset <name="Data Start Offset", comment="Absolute">;
+    uint fileSize  <name="File Size">;
+    uint fileCount <name="File Count">;
+    uint Version;
+    uint stringTableOffset <name="String Table Offset", comment="Absolute">;
+} Header <name="Header", read=Str("Archive Version %u | File Size: %u bytes | %u Assets", this.Version, this.fileSize, this.fileCount)>;
+
+typedef struct {
+    uint fileNameOffset <name="File Name Offset",  comment="Absolute">;
+    uint fileHash       <name="File Hash", comment="Most likely", format=hex>;
+    uint fileSizeCompressed   <name="File Size (Compressed)">;
+    uint fileSizeUncompressed <name="File Size (Uncompressed)">;
+    uint fileOffset       <name="File Offset", comment="Absolute">;
+    ASSET_TYPE fileType   <name="File Type", format=hex>;
+    uint isCompressedFlag <name="Is Compressed?", format=hex>;
+} FileEntry <name="File Entry">;
+
+typedef struct { string fileName <name="File Name">; } AssetName <name="Asset File Name", read=fileName>;
+
+//---------------------------------------------------------
+
+typedef struct {
+    uint imageOffset <name="Image Offset", comment="Relative">;
+    uint imageSize   <name="Image Size">;
+    uint Constant1   <format=hex>;
+    uint Constant2   <format=hex>;
+} MipEntry <name="Mip Map Table", read=Str("Offset: %u | Size: %u bytes", imageOffset, imageSize)>;
+
+typedef struct (uint size) { byte imageData[size] <format=hex>; } MipPayload;
+
+typedef struct (uint baseOffset, string name) {
+    local string fileName <name="Texture Name"> = name;
+
+    ubyte Constant1 <format=hex>;
+    ubyte Constant2 <format=hex>;
+    ubyte Constant3 <format=hex>;
+    ubyte Unknown4  <format=hex>;
+    ushort imageWidth  <name="Image Width">;
+    ushort imageHeight <name="Image Height">;
+    IMAGE_FORMAT imageFormat <name="Image Format">;
+    ubyte Constant5 <format=hex>;
+    ubyte imageMipMapCount <name="Image Mip Map Count">;
+    ubyte Unknown6  <format=hex>;
+    uint  Unknown7  <format=hex>;
+    uint imageMipMapTableOffset <name="Image Mip Map Table Offset", comment="Relative to texture block">;
+
+    local uint64 currentPosition <hidden=true> = FTell();
+    if (imageMipMapTableOffset > 0 && imageMipMapCount > 0) {
+        FSeek(baseOffset + imageMipMapTableOffset);
+        MipEntry mips[imageMipMapCount] <optimize=false>;
+        for (m = 0; m < imageMipMapCount; m++) {
+            if (mips[m].imageSize > 0) {
+                FSeek(baseOffset + mips[m].imageOffset);
+                MipPayload mipLevel(mips[m].imageSize) <name="Mip Map Data">;
+            }
+        }
+    }
+    FSeek(currentPosition);
+} TextureBlock <read=Str("%s | Image Dimensions: %ux%u | Image Format: %s", fileName, imageWidth, imageHeight, EnumToString(imageFormat))>;
+
+//---------------------------------------------------------
+
+struct {
+    Header header;
+    if (header.fileCount > 0) FileEntry entries[header.fileCount] <optimize=false>;
+    if (header.stringTableOffset > 0) {
+        FSeek(header.stringTableOffset);
+        AssetName names[header.fileCount] <optimize=false>;
+    }
+    struct {
+        for (i = 0; i < header.fileCount; i++) {
+            FSeek(entries[i].fileOffset);
+            TextureBlock Payload(entries[i].fileOffset, names[i].fileName);
+        }
+    } TextureData <name="Asset Payload">;
+} TEX <name="Dead Rising 4 .TEX Texture Archive">;
+
+//---------------------------------------------------------

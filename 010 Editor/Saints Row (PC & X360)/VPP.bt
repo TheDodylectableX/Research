@@ -1,0 +1,150 @@
+//------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: VPP.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Saints Row's archives
+//  Category: Archives
+// File Mask: *.vpp_*
+//  ID Bytes: CE 0A 89 51 | 51 89 0A CE
+//   History: 
+//------------------------------------------------------
+
+LittleEndian();
+local uint magicPeek <hidden=true> = ReadUInt(0);
+if (magicPeek == 0xCE0A8951) BigEndian(); else LittleEndian();
+
+local int64 dataBaseOffset      <hidden=true> = 0; // Start of the file data region
+local int64 dataRunningOffset   <hidden=true> = 0; // Running cursor for compressed packages
+local int64 fileNameBlockOffset <hidden=true> = 0; // Cursor for file name block
+local uint  packageCompressed   <hidden=true> = 0;
+local uint  packageCondensed    <hidden=true> = 0;
+local uint  packageVersion      <hidden=true> = 0;
+
+uint64 AlignSector(uint64 value, uint64 alignment) { return (value + (alignment - 1)) & ~(alignment - 1); }
+
+typedef enum <uint> {
+    SAINTS_ROW       = 3,
+    SAINTS_ROW_2     = 4,
+    SR_THE_THIRD     = 6,
+    SAINTS_ROW_4     = 10,
+    AGENTS_OF_MAYHEM = 11
+} GAME_VERSION;
+
+typedef enum <uint> {
+    PACKED_UNCOMPRESSED         = 0, // Uncompressed per-file blocks.
+    PACKED_COMPRESSED           = 1, // ZLib compressed per-file blocks.
+    PACKED_CONDENSED            = 2, // Uncompressed condensed data stream. (SR2)
+    PACKED_COMPRESSED_CONDENSED = 3  // ZLib compressed condensed data stream. (SR1)
+} PACKFILE_FLAGS;
+
+typedef struct { string assetName; } NameBlock <read=this.assetName>;
+
+//------------------------------------------------------
+
+typedef struct {
+    uint Magic <format=hex>;
+    GAME_VERSION Version;
+    if      (Version == SAINTS_ROW || Version == SAINTS_ROW_2) FSkip(324);
+    else if (Version == SR_THE_THIRD) FSkip(336);
+    PACKFILE_FLAGS Flags <name="Flags", comment="bit0 = Compressed, bit1 = Condensed (solid)", format=hex>;
+    FSkip(4);   // Reserved
+    uint fileCount <name="File Count">;
+    uint fileSize  <name="File Size", comment="Total archive size in bytes">;
+    uint indexSize <name="File Listings Size", comment="Total bytes of the entry/index block">;
+    uint namesSize <name="File Names Size", comment="Total bytes of the name block">;
+    if (Version == SAINTS_ROW_2) uint extensionsSize <name="File Extensions Size", comment="Total bytes of the extension block">;
+    else uint Unknown1 <format=hex>;
+    uint archiveSizeUncompressed   <name="File Size (Uncompressed)">;
+    if      (Version == SAINTS_ROW_2) { int  archiveSizeCompressed <name="File Size (Compressed)", comment="-1 = Uncompressed">; uint Unknown2[3] <format=hex>; }
+    else if (Version == SAINTS_ROW)   { uint Unknown2 <format=hex>, Unknown3 <format=hex>; }
+} Header <name="Header", read=Str("Packfile 0x%X Version %u | File Size: %u bytes", this.Magic, this.Version, this.fileSize)>;
+
+//------------------------------------------------------
+
+typedef struct {
+    uint fileNameOffset      <name="File Name Offset",      comment="Relative, into the name block">;
+    uint fileExtensionOffset <name="File Extension Offset", comment="Relative, into the extension block (v4)">;
+    if (packageVersion == SAINTS_ROW) {
+        uint fileRuntimeOffset <name="File Runtime Offset", comment="Offset into the DECOMPRESSED data (Mode C) or uncompressed runtime offset (Mode B)">;
+        uint fileNameHash      <name="File Name Hash", format=hex>;
+    } else { FSkip(4); uint fileDataOffset <name="File Offset", comment="Relative to the data base">; }
+    uint fileSizeUncompressed <name="File Size (Uncompressed)">;
+    int  fileSizeCompressed   <name="File Size (Compressed)", comment="ZLib | -1 = Uncompressed">;
+    FSkip(4); // Reserved
+
+    //--- Pull this entry's filename for the string
+    local string fileName         <hidden=true>;
+    local uint64 fileNamePosition <hidden=true> = FTell();
+    FSeek(fileNameBlockOffset + fileNameOffset);
+    fileName = ReadString(FTell());
+    FSeek(fileNamePosition);
+
+    //--- Resolve where this file's bytes really live
+    local int64 dataTargetOffset <hidden=true> = 0;
+    local uint  dataActualSize   <hidden=true> = 0;
+
+    if (packageCompressed == 1 && packageCondensed == 1) {
+        // Mode C: All file data is one solid ZLib stream; Nothing to map inline.
+        dataTargetOffset   = 0;
+        dataActualSize     = 0;
+    } else if (packageCompressed == 1) {
+        // Mode B: Contiguous, Sector-aligned ZLib blocks. Follow the cursor.
+        dataTargetOffset   = dataRunningOffset;
+        dataActualSize     = fileSizeCompressed;
+        dataRunningOffset += AlignSector(fileSizeCompressed, 2048);
+    } else {
+        // Mode A: Uncompressed, stored relative offset is real.
+        dataTargetOffset   = dataBaseOffset + fileDataOffset;
+        dataActualSize     = (fileSizeCompressed == -1) ? fileSizeUncompressed : fileSizeCompressed;
+    }
+
+    // --- Embed the file's bytes inline (store / seek / read / restore)
+    if (dataActualSize > 0 && dataTargetOffset > 0 && dataTargetOffset < FileSize()) {
+        local uint64 currentPosition <hidden=true> = FTell();
+        FSeek(dataTargetOffset);
+        ubyte fileData[dataActualSize] <name="File Data">;
+        FSeek(currentPosition);
+    }
+} Entry <read=Str("%s | Size: %u bytes (Uncompressed) | %d bytes (Compressed)", this.fileName, this.fileSizeUncompressed, this.fileSizeCompressed)>;
+
+//------------------------------------------------------
+
+struct {
+    Header header;
+
+    packageVersion    = header.Version;
+    packageCompressed = (header.Flags & 1);
+    packageCondensed  = (header.Flags & 2) >> 1;
+
+    fileNameBlockOffset = 2048 + AlignSector(header.indexSize, 2048);
+
+    if      (header.Version == SAINTS_ROW_2) dataBaseOffset = fileNameBlockOffset + AlignSector(header.namesSize, 2048)
+                                                                                  + AlignSector(header.extensionsSize, 2048);
+    else if (header.Version == SAINTS_ROW)   dataBaseOffset = fileNameBlockOffset + AlignSector(header.namesSize, 2048);
+
+    dataRunningOffset = dataBaseOffset;
+
+    //--- Entry/index table (Sector aligned at 2048)
+    FSeek(2048);
+    if (header.fileCount > 0) Entry files[header.fileCount] <name="File Listings", optimize=false>;
+
+    //--- File names block
+    FSeek(fileNameBlockOffset);
+    NameBlock fileNames[header.fileCount] <name="File Names", bgcolor=0xCC99FF, optimize=false>;
+
+    //--- File extensions block (SR2 only)
+    if (header.Version == SAINTS_ROW_2) {
+        FSeek(dataBaseOffset - AlignSector(header.extensionsSize, 2048));
+        char fileExtensions[header.extensionsSize] <name="File Extensions", bgcolor=0x99FFFF>;
+    }
+
+    //--- Condensed packages: The whole data section is one ZLib stream
+    if (packageCompressed == 1 && packageCondensed == 1 && dataBaseOffset < FileSize()) {
+        FSeek(dataBaseOffset);
+        ubyte condensedDataStream[FileSize() - dataBaseOffset] <name="Condensed Data Stream", comment="Decompress this whole block then use each entry's Runtime Offset + Size (Uncompressed) to slice out files">;
+    }
+} VPP <name="Volition Saints Row .VPP_Platform Archive">;
+
+//------------------------------------------------------

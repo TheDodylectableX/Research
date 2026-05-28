@@ -1,0 +1,56 @@
+//------------------------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: MSH.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Tomb Raider: Angel of Darkness Remastered's static model format
+//  Category: Models
+// File Mask: *.MSH
+//  ID Bytes: 
+//   History: 
+//------------------------------------------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+
+typedef struct {
+    uint FileSize      <name="File Size">;
+    uint64 Version;
+    uint64 VertexCount <name="Vertex Count">;
+    uint64 FaceCount   <name="Face Count">;
+    uint64 MeshCount   <name="Mesh Count">;
+    FSkip(16); // Offset | Pointer storage area for the engine
+} Header <name="Header", read=Str("%u Meshes | %u Vertices | %u Faces | File Size: %u bytes", this.MeshCount, this.VertexCount, this.FaceCount / 3, this.FileSize)>;
+
+typedef struct {
+    VEC3F Positions;
+    VEC2F UV1;
+    VEC2F UV2;
+    VEC4UB Normals;
+    VEC4UB Tangents;
+    VEC4UB PackedData; // No idea what this is but it's not Vertex Color
+} Vertices <name="Vertices">;
+
+typedef struct {
+    uint Index;
+    uint MaterialFaceStart   <name="Material Face Start">;
+    uint MaterialFaceEnd     <name="Material Face End">;
+    uint64 Unknown           <format=hex>;
+    uint MaterialVertexStart <name="Material Vertex Start">;
+    uint MaterialVertexEnd   <name="Material Vertex Start">;
+    uint TextureCount        <name="Texture Start">; // Maybe?
+    VEC4F BoundingBoxMin     <name="Mesh Bounding Box Minimum">;
+    VEC4F BoundingBoxMax     <name="Mesh Bounding Box Maximum">;
+} Material <name="Material">;
+
+//------------------------------------------------------------------------------------------------
+
+struct {
+    Header header;
+    if (header.VertexCount > 0) Vertices vertices[header.VertexCount] <optimize=false>;
+    if (header.FaceCount > 0)   VEC3US Faces[header.FaceCount / 3]    <optimize=false>;
+    if (header.MeshCount > 0)   Material material[header.MeshCount]   <optimize=false>;
+} MSH <name="Tomb Raider: Angel of Darkness Remastered .MSH Static Mesh">;
+
+//------------------------------------------------------------------------------------------------

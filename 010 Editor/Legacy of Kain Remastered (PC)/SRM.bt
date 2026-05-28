@@ -1,0 +1,77 @@
+//---------------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: SRM.bt
+//   Authors: Dodylectable, MuruCoder (Shader Research)
+//   Version: 1.0
+//   Purpose: Reverse engineering the Legacy of Kain: Soul Reaver I-II Remastered models
+//  Category: Models
+// File Mask: *.SRM
+//  ID Bytes: 53 52 4D 01
+//   History: 
+//---------------------------------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+
+typedef struct { // Thanks MuruCoder for figuring the shaders out
+    uint Type           <name="Shader Type">;
+    VEC4F Parameters    <name="Shader Parameters">;
+    uint OpaqueOffset   <name="Opaque Offset",   comment="This is the start of how many triangles that need to be rendered opaque">;
+    uint OpaqueLength   <name="Opaque Length",   comment="This is the length of how many triangles that need to be rendered opaque, Divide by 3">;
+    uint AlphaOffset    <name="Alpha Offset",    comment="This is the start of how many triangles that need to be rendered with alpha masking">;
+    uint AlphaLength    <name="Alpha Length",    comment="This is the length of how many triangles that need to be rendered with alpha masking, Divide by 3">;
+    uint AdditiveOffset <name="Additive Offset", comment="This is the start of how many triangles that need to be rendered additive">;
+    uint AdditiveLength <name="Additive Length", comment="This is the length of how many triangles that need to be rendered additive, Divide by 3">;
+} Shaders <name="Shaders">;
+
+typedef struct {
+    char Magic[4]     <name="Magic">;
+    uint ShaderCount  <name="Shader Count">;
+    Shaders shaders[ShaderCount];
+    uint TextureCount <name="Texture Count", comment="The amount of textures used by the model">;
+} Header <name="Header", read=Str("Model Type: %s | %u Textures", this.Magic, this.TextureCount)>;
+
+typedef struct {
+    char Texture[31]  <comment="Corresponds to a set of DDS files (diffuse / norm / spec and gloss) with the same name in TEX folder">;
+    ubyte TextureFlag <name="Texture Flag">;
+} Textures <name="Textures", read=Str("%s", this.Texture)>;
+
+//---------------------------------------------------------------------------------------
+
+typedef struct { VEC3F Bone[4]; } BoneMatrices <name="Bone Matrices">;
+typedef struct { ubyte Unknown <comment="No idea what this is, but it goes from 0 to 1 only">; } BoneFlags <name="Bone Flags", read=Unknown>;
+
+typedef struct {
+    VEC3F Positions;
+    VEC3UB Tangents     <comment="Subtract 127 and normalize">;
+    ubyte Constant      <name="Constant", comment="No idea what this is">;
+    VEC3UB Normals      <comment="Subtract 127 and normalize">;
+    ubyte MaterialIndex <name="Material Index">;
+    VEC3UB Indices      <name="Bone Indices">;
+    ubyte U             <read=UByteToFloat>;
+    VEC3UB Weights      <name="Bone Weights">;
+    ubyte V             <read=UByteToFloat>;
+    FSkip(4); // Reserved
+} Vertices;
+
+typedef struct { VEC3US Triangles; } Triangles <name="Triangles">;
+
+//---------------------------------------------------------------------------------------
+
+struct {
+    Header header;
+    if (header.TextureCount > 0) Textures textures[header.TextureCount];
+
+    uint BoneCount;
+    BoneMatrices bonematrices[BoneCount+32];
+    if (BoneCount > 0) FSkip(4);
+    BoneFlags boneflags[128];
+
+    uint VertexCount <name="Vertex Count">;
+    uint FaceCount   <name="Face Count", comment="Divide by 3 to get the actual count">;
+    if (VertexCount > 0) Vertices vertices[VertexCount] <name="Vertices", optimize=false>;
+    if (FaceCount > 0)   Triangles triangles[FaceCount / 3] <name="Triangles", optimize=false>;
+} SRM <name="Legacy of Kain: Soul Reaver I-II Remastered .SRM Model">;
+
+//---------------------------------------------------------------------------------------

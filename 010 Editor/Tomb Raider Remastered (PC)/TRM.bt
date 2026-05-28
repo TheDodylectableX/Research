@@ -1,0 +1,98 @@
+//------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: TRM.bt
+//   Authors: Dodylectable, MuruCoder (Initial Research)
+//   Version: 1.0
+//   Purpose: Reverse engineering the Tomb Raider I-V Remastered models
+//  Category: Models
+// File Mask: *.TRM
+//  ID Bytes: 54 52 4D 02
+//   History: 
+//------------------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+
+// Switch the type from Default to Head if you want to parse a head model!
+const string Type <hidden=true> = "Default";
+
+// If you're parsing an HD model made by Magic Media from the Challenge Mode Update
+// You'll want to switch the vertex structure from Default to HD!
+const string VertexStructure <hidden=true> = "Default";
+
+//------------------------------------------------------------------------
+
+typedef struct { // Thanks MuruCoder for figuring the shaders out
+    uint Type           <name="Shader Type">;
+    VEC4F Parameters    <name="Shader Parameters">;
+    uint OpaqueOffset   <name="Opaque Offset",   comment="This is the start of how many triangles that need to be rendered opaque">;
+    uint OpaqueLength   <name="Opaque Length",   comment="This is the length of how many triangles that need to be rendered opaque, Divide by 3">;
+    uint AlphaOffset    <name="Alpha Offset",    comment="This is the start of how many triangles that need to be rendered with alpha masking">;
+    uint AlphaLength    <name="Alpha Length",    comment="This is the length of how many triangles that need to be rendered with alpha masking, Divide by 3">;
+    uint AdditiveOffset <name="Additive Offset", comment="This is the start of how many triangles that need to be rendered additive">;
+    uint AdditiveLength <name="Additive Length", comment="This is the length of how many triangles that need to be rendered additive, Divide by 3">;
+} Shaders <name="Shaders">;
+
+typedef struct {
+    char Magic[4]     <name="Magic">;
+    uint ShaderCount  <name="Shader Count">;
+    Shaders shaders[ShaderCount];
+    uint TextureCount <name="Texture Count">;
+} Header <name="Header", read=Str("Model Type: %s | %d Textures", this.Magic, this.TextureCount)>;
+
+typedef struct { ushort ID <comment="Corresponds to a DDS file with the same name in TEX folder">; } Textures <name="Textures", read=Str("Texture: %d.DDS", this.ID)>;
+
+//------------------------------------------------------------------------
+
+typedef struct {
+    VEC3F  Positions;
+    VEC3UB Normals       <comment="Subtract 127 and normalize">;
+    ubyte  MaterialIndex <name="Material Index">;
+    if (VertexStructure == "Default") {
+        VEC3UB Indices  <name="Bone Indices">;
+        ubyte U         <read=UByteToFloat>;
+        VEC3UB Weights  <name="Bone Weights">;
+        ubyte V         <read=UByteToFloat>;
+    } else {
+        VEC3UB Indices <name="Bone Indices">;
+        VEC3UB Weights <name="Bone Weights">;
+        VEC2F UV;
+    }
+} Vertices;
+
+typedef struct { VEC3US Triangles; } Triangles <name="Triangles">;
+typedef struct { VEC3F Matrix[4]; }  Matrices  <name="Matrices">;
+
+//------------------------------------------------------------------------
+
+struct {
+    Header header;
+    Textures textures[header.TextureCount];
+    while (!ReadByte()) FSkip(1);
+    if (Type == "Head") {
+        uint BoneCount <name="Bone Count">;
+        if (BoneCount > 0) {
+            struct {
+                    Matrices matrices[BoneCount] <optimize=false>;
+
+                    uint animationRelatedCount <name="Animation Related Count">;
+                    // A pair of unsigned integers for each count
+                    struct { uint animationRelatedValue[2]; } animationRelatedValues[animationRelatedCount] <name="Animation Related Values">;
+
+                    uint animationFrameCount <name="Animation Frame Count">;
+                    uint animationFrames[animationFrameCount] <name="Animation Frames", comment="Frame numbers?">;
+                    ushort animationRelatedB <name="Animation Related Value 1">;
+                    ushort animationRelatedC <name="Animation Related Value 2", comment="Unused?">;
+                    if (animationFrameCount * animationRelatedB > 0) struct { VEC3F Matrix[4]; } animationMatrix[animationFrameCount * animationRelatedB] <name="Animation Matrix">;
+            } Skeleton;
+        }
+    }
+    uint FaceCount   <name="Face Count", comment="Divide by 3 to get the actual count">;
+    uint VertexCount <name="Vertex Count">;
+    if (FaceCount > 0)   Triangles triangles[FaceCount / 3] <name="Triangles", optimize=false>;
+    while (!ReadShort()) FSkip(2);
+    if (VertexCount > 0) Vertices vertices[VertexCount] <name="Vertices", optimize=false>;
+} TRM <name="Tomb Raider I-V Remastered .TRM Model">;
+
+//------------------------------------------------------------------------

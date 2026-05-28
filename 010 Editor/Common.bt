@@ -1,0 +1,289 @@
+//-------------------------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: Common.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Simplifying tasks on templates by adding known structures to call from here
+//  Category: Reverse Engineering
+// File Mask: *
+//  ID Bytes: bruh
+//   History: 
+//-------------------------------------------------------------------------------------------------
+
+// <name="", comment="", read="", format=hex, hidden=false, optimize=false>;
+
+//-------------------------------------------------------------------------------------------------
+
+//------------
+// DATA TYPES
+//------------
+
+// Signed 24-bit integer.
+typedef struct { uint Value; } int24 <size=3, read=ReadInt24>;
+
+string ReadInt24(int24 &V) {
+    local uint Low  = ReadUShort(startof(V));
+    local uint High = ReadUByte(startof(V) + 2);
+    local int  Result = (High << 16) | Low;
+
+    // Check the 24th bit (0x800000) for the sign.
+    if (Result & 0x800000) { Result |= 0xFF000000; } // Sign extend to fill the 32-bit space.
+
+    return Str("%d", Result);
+}
+
+// Unsigned 24-bit integer.
+typedef struct { uint Value; } uint24 <size=3, read=ReadUInt24>;
+
+string ReadUInt24(uint24 &V) {
+    local uint Low  = ReadUShort(startof(V));
+    local uint High = ReadUByte(startof(V) + 2);
+    local uint Result = (High << 16) | Low;
+    
+    return Str("%u", Result);
+}
+
+// ----------------------------------------------------------------------
+
+// Signed 48-bit integer.
+typedef struct { int64 Value; } int48 <size=6, read=ReadInt48>;
+
+string ReadInt48(int48 &V) {
+    local uint64 Low  = ReadUInt(startof(V));
+    local uint64 High = ReadUShort(startof(V) + 4);
+    local int64  Result = (High << 32) | Low;
+    
+    // Check the 48th bit (0x800000000000) for the sign.
+    if (Result & 0x800000000000L) { Result |= 0xFFFF000000000000L; } // Sign extend to fill the 64-bit space.
+
+    return Str("%Ld", Result);
+}
+
+// Unsigned 48-bit integer.
+typedef struct { uint64 Value; } uint48 <size=6, read=ReadUInt48>;
+
+string ReadUInt48(uint48 &V) {
+    local uint64 Low  = ReadUInt(startof(V));
+    local uint64 High = ReadUShort(startof(V) + 4);
+    local uint64 Result = (High << 32) | Low;
+
+    return Str("%Lu", Result);
+}
+
+//-------------------------------------------------------------------------------------------------
+
+//------------
+// TEXT STUFF
+//------------
+
+// An integer length-prefixed string.
+typedef struct {
+    uint Length;
+    char ActualString[Length] <name="Actual String">;
+} String <read=Str("%s", Length > 0 ? ActualString : "")>;
+
+// A short length-prefixed string.
+typedef struct {
+    ushort Length;
+    char   ActualString[Length] <name="Actual String">;
+} StringV2 <read=Str("%s", Length > 0 ? ActualString : "")>;
+
+//-------------------------------------------------------------------------------------------------
+
+//-------------
+// CONVERSIONS
+//-------------
+
+// Convert signed byte to float.
+string SByteToFloat(byte f) {
+    string Str;
+    SPrintf(Str, "%lg", f / 128.0);
+    return Str;
+};
+
+// Convert unsigned byte to float.
+string UByteToFloat(ubyte f) {
+    string Str;
+    SPrintf(Str, "%lg", f / 255.0);
+    return Str;
+};
+
+// Convert signed short to float.
+string SShortToFloat(short f) {
+    string Str;
+    SPrintf(Str, "%lg", f / 32768.0);
+    return Str;
+};
+
+// Convert unsigned short to float.
+string UShortToFloat(ushort f) {
+    string Str;
+    SPrintf(Str, "%lg", f / 65535.0);
+    return Str;
+};
+
+// Convert signed integer to float.
+string SIntToFloat(int f) {
+    string Str;
+    SPrintf(Str, "%lg", f / 2147483647.0);
+    return Str;
+};
+
+// Convert unsigned integer to float.
+string UIntToFloat(uint f) {
+    string Str;
+    SPrintf(Str, "%lg", f / 4294967295.0);
+    return Str;
+};
+
+// Correct a file size by multiplying it with the DVD sector size, This is mainly for old games.
+string Sector(DWORD d) {
+    string Str;   
+    SPrintf(Str, "%d", d * 2048);
+    return Str;
+};
+
+//-------------------------------------------------------------------------------------------------
+
+//-----------------------------
+// VECTORS - 2D/3D based stuff
+//-----------------------------
+
+//--------
+// FLOATS
+//--------
+
+// A vector of two full-precision floating points.
+typedef struct {
+    float X, Y;
+} VEC2F <read=Str("(X: %f | Y: %f)", this.X, this.Y)>;
+
+// A vector of three full-precision floating points.
+typedef struct {
+    float X, Y, Z;
+} VEC3F <read=Str("(X: %f | Y: %f | Z: %f)", this.X, this.Y, this.Z)>;
+
+// A vector of four full-precision floating points.
+typedef struct {
+    float X, Y, Z, W;
+} VEC4F <read=Str("(X: %f | Y: %f | Z: %f | W: %f)", this.X, this.Y, this.Z, this.W)>;
+
+//-------------
+// HALF-FLOATS
+//-------------
+
+// A vector of two half-precision floating points.
+typedef struct {
+    hfloat X, Y;
+} VEC2HF <read=Str("(X: %f | Y: %f)", this.X, this.Y)>;
+
+// A vector of three half-precision floating points.
+typedef struct {
+    hfloat X, Y, Z;
+} VEC3HF <read=Str("(X: %f | Y: %f | Z: %f)", this.X, this.Y, this.Z)>;
+
+// A vector of four half-precision floating points.
+typedef struct {
+    hfloat X, Y, Z, W;
+} VEC4HF <read=Str("(X: %f | Y: %f | Z: %f | W: %f)", this.X, this.Y, this.Z, this.W)>;
+
+//----------------------------------------------------------------------
+
+//----------
+// INTEGERS
+//----------
+
+// A vector of two signed integers.
+typedef struct {
+    int X, Y;
+} VEC2SI <read=Str("(X: %d | Y: %d)", this.X, this.Y)>;
+
+// A vector of two unsigned integers.
+typedef struct {
+    uint X, Y;
+} VEC2UI <read=Str("(X: %d | Y: %d)", this.X, this.Y)>;
+
+// A vector of three signed integers.
+typedef struct {
+    int X, Y, Z;
+} VEC3SI <read=Str("(X: %d | Y: %d | Z: %d)", this.X, this.Y, this.Z)>;
+
+// A vector of three unsigned integers.
+typedef struct {
+    uint X, Y, Z;
+} VEC3UI <read=Str("(X: %d | Y: %d | Z: %d)", this.X, this.Y, this.Z)>;
+
+// A vector of four signed integers.
+typedef struct {
+    int X, Y, Z, W;
+} VEC4SI <read=Str("(X: %d | Y: %d | Z: %d | W: %d)", this.X, this.Y, this.Z, this.W)>;
+
+// A vector of four unsigned integers.
+typedef struct {
+    uint X, Y, Z, W;
+} VEC4UI <read=Str("(X: %d | Y: %d | Z: %d | W: %d)", this.X, this.Y, this.Z, this.W)>;
+
+//----------------------------------------------------------------------
+
+//--------
+// SHORTS
+//--------
+
+// A vector of two signed shorts.
+typedef struct {
+    short X, Y;
+} VEC2SS <read=Str("(X: %d | Y: %d)", this.X, this.Y)>;
+
+// A vector of two unsigned shorts.
+typedef struct {
+    ushort X, Y;
+} VEC2US <read=Str("(X: %d | Y: %d)", this.X, this.Y)>;
+
+// A vector of three signed shorts.
+typedef struct {
+    short X, Y, Z;
+} VEC3SS <read=Str("(X: %d | Y: %d | Z: %d)", this.X, this.Y, this.Z)>;
+
+// A vector of three unsigned shorts.
+typedef struct {
+    ushort X, Y, Z;
+} VEC3US <read=Str("(X: %d | Y: %d | Z: %d)", this.X, this.Y, this.Z)>;
+
+// A vector of four signed shorts.
+typedef struct {
+    short X, Y, Z, W;
+} VEC4SS <read=Str("(X: %d | Y: %d | Z: %d | W: %d)", this.X, this.Y, this.Z, this.W)>;
+
+// A vector of four unsigned shorts.
+typedef struct {
+    ushort X, Y, Z, W;
+} VEC4US <read=Str("(X: %d | Y: %d | Z: %d | W: %d)", this.X, this.Y, this.Z, this.W)>;
+
+//----------------------------------------------------------------------
+
+//-------
+// BYTES
+//-------
+
+// A vector of three signed bytes.
+typedef struct {
+    byte X, Y, Z;
+} VEC3SB <read=Str("(X: %d | Y: %d | Z: %d)", this.X, this.Y, this.Z)>;
+
+// A vector of three unsigned bytes.
+typedef struct {
+    ubyte X, Y, Z;
+} VEC3UB <read=Str("(X: %d | Y: %d | Z: %d)", this.X, this.Y, this.Z)>;
+
+// A vector of four signed bytes.
+typedef struct {
+    byte X, Y, Z, W;
+} VEC4SB <read=Str("(X: %d | Y: %d | Z: %d | W: %d)", this.X, this.Y, this.Z, this.W)>;
+
+// A vector of four unsigned bytes.
+typedef struct {
+    ubyte X, Y, Z, W;
+} VEC4UB <read=Str("(X: %d | Y: %d | Z: %d | W: %d)", this.X, this.Y, this.Z, this.W)>;
+
+//-------------------------------------------------------------------------------------------------

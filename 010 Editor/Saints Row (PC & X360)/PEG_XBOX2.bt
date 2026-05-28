@@ -1,0 +1,79 @@
+//----------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: PEG_XBOX2.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Saints Row's texture containers
+//  Category: Images / Textures
+// File Mask: *.peg_xbox2
+//  ID Bytes: 56 4B 45 47
+//   History: 
+//----------------------------------------------------------------
+
+// Standard textures (diffuse / specular) will have .tga in their names, Normal maps will have .tgn instead. (SR1)
+
+BigEndian();
+local uint previousNextOffset  <hidden=true> = 0; // Running cumulative offset of the PREVIOUS entry (drives this entry's start).
+local uint imageDataSizeGlobal <hidden=true> = 0; // Total image-data span, captured from the header so the last entry can resolve.
+
+typedef enum <ushort> {
+    DXT1       = 400,
+    DXT1_ALPHA = 402,
+    DXT5       = 603
+} IMAGE_FORMAT;
+
+//----------------------------------------------------------------
+
+typedef struct {
+    char   Magic[4];
+    ushort versionMajor      <name="Version (Major)">;
+    ushort versionMinor      <name="Version (Minor)">;
+    uint   imageDataOffset   <name="Image Data Offset", comment="Raw image data offset (Page-aligned to 0x1000 in practice)">;
+    uint   imageDataSize     <name="Image Data Size",   comment="Total file size minus the image starting offset (4096 bytes)">;
+    ushort imageCount        <name="Image Count">;
+    FSkip(2); // Reserved
+    ushort Unknown1          <name="Unknown 1", format=hex>;
+    ushort Unknown2          <name="Unknown 2", format=hex>;
+    uint   imageBaseOffset   <name="Image Starting Offset">;
+} PEG_HEADER <read=Str("%s Version %u.%u | %u Textures", this.Magic, this.versionMajor, this.versionMinor, this.imageCount)>;
+
+typedef struct {
+    ushort imageWidth        <name="Image Width">;
+    ushort imageHeight       <name="Image Height">;
+    IMAGE_FORMAT imageFormat <name="Image Format">;
+    FSkip(2); // Reserved
+    uint   Unknown1          <name="Unknown", format=hex>;
+    FSkip(4); // Reserved
+    ushort imageFlags        <name="Image Flags", format=hex>;
+    byte   imageMipMapCount  <name="Image Mip Map Count", comment="1 = No Mips">;
+    char   imageName[45]     <name="Image Name", comment="Null-terminated, padded to fill record.">;
+    FSkip(4); // Reserved
+    uint   nextDataOffset    <name="Next Data Offset", comment="Cumulative byte offset (Relative to image base) of the NEXT texture's data; 0 = Last (Runs to image data end)">;
+
+    //---- Resolve the texture data range
+    local int64 texDataStart    <hidden=true> = Header.imageBaseOffset + previousNextOffset;
+    local int64 texDataEnd      <hidden=true> = Header.imageBaseOffset + (nextDataOffset != 0 ? nextDataOffset : imageDataSizeGlobal);
+    local int64 imageOffset     <hidden=true> = texDataStart;
+    local int64 imageSize       <hidden=true> = texDataEnd - texDataStart;
+    local int64 currentPosition <hidden=true> = FTell();
+
+    FSeek(imageOffset);
+    if (imageSize > 0) byte imageData[imageSize] <name="Image Data">;
+    FSeek(currentPosition);
+    // Advance the running cumulative offset for the next entry.
+    previousNextOffset = (nextDataOffset != 0 ? nextDataOffset : previousNextOffset);
+} PEG_TEXTURE <read=Str("%s | Image Dimensions: %ux%u | Image Format: %s | Image Mip Map Count: %u | Image Offset: %u (%u bytes)",
+                        this.imageName, this.imageWidth, this.imageHeight, EnumToString(this.imageFormat), this.imageMipMapCount,
+                        this.texDataStart, this.imageSize)>;
+
+//----------------------------------------------------------------
+
+struct {
+    PEG_HEADER Header;
+    imageDataSizeGlobal   = Header.imageDataSize;
+    previousNextOffset    = 0;
+    if (Header.imageCount > 0) PEG_TEXTURE Textures[Header.imageCount] <optimize=false>;
+} PEG <name="Volition Saints Row .PEG_XBOX2 Texture Container">;
+
+//----------------------------------------------------------------

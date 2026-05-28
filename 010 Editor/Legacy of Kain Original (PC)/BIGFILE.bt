@@ -1,0 +1,77 @@
+//---------------------------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: BIGFILE.bt
+//   Authors: Dodylectable, watto (Initial Research for SR1/2 BIGFILE)
+//   Version: 1.0
+//   Purpose: Reverse engineering Legacy of Kain: Soul Reaver 1/2 and Defiance's BIGFILE.DAT archives
+//  Category: Archives
+// File Mask: BIGFILE.DAT | bigfile.x64.dat | bigfilehd.dat
+//  ID Bytes: 
+//   History: 
+//---------------------------------------------------------------------------------------------------
+
+LittleEndian();
+
+// Switch game types between SR1, SR2 and Defiance to parse formats properly!
+const string Game <hidden=true> = "SR1";
+
+struct {
+    if (Game == "SR1" || Game == "SR2") uint FileCount <name="File Count">;
+    // ----------------------------
+    // Legacy of Kain: Soul Reaver
+    // ----------------------------
+    if (Game == "SR1") {
+        struct {
+            uint FileHash    <name="File Hash", comment="CRC32", format=hex>;
+            uint FileSize    <name="File Size">;
+            uint FileOffset  <name="File Offset">;
+            char FileType[4] <name="File Type">;
+
+            local uint64 currentPosition <hidden=true> = FTell();
+            FSeek(FileOffset);
+            byte FileData[FileSize] <name="File Data">;
+            FSeek(currentPosition);
+        } FileListing[FileCount] <read=Str("File Hash: 0x%X | File Size: %u | File Offset: %u | File Type: %s", this.FileHash, this.FileSize, this.FileOffset, this.FileType), optimize=false>;
+    }
+    // -------------------------------
+    // Legacy of Kain: Soul Reaver II
+    // -------------------------------
+    if (Game == "SR2") {
+        struct { uint FileHash <name="File Hash", comment="CRC32", format=hex>; } Hashes[FileCount] <read=FileHash, optimize=false>;
+
+        struct {
+            uint FileSize     <name="File Size">;
+            uint64 FileOffset <name="File Offset">;
+
+            local uint64 currentPosition <hidden=true> = FTell();
+            FSeek(FileOffset);
+            byte FileData[FileSize] <name="File Data">;
+            FSeek(currentPosition);
+        } FileListing[FileCount] <read=Str("File Size: %u | File Offset: %u", this.FileSize, this.FileOffset), optimize=false>;
+    }
+    // --------------------------------------
+    // Legacy of Kain: Defiance (Remastered)
+    // --------------------------------------
+    if (Game == "Defiance") {
+        struct { uint FileCount <name="File Count">; } Header;
+
+        struct { uint FileHash <name="File Hash", comment="CRC32", format=hex>; } Hashes[Header.FileCount] <read=Str("File Hash: %u", this.FileHash), optimize=false>;
+
+        struct {
+            uint64 FileSize   <name="File Size (Uncompressed)">;
+            uint64 FileOffset <name="File Offset">;
+            uint64 FileSizeCompressed <name="File Size (Compressed)">;
+
+            local uint ActualSize = (FileSizeCompressed == 0) ? FileSize : FileSizeCompressed;
+            if (ActualSize > 0 && FileOffset > 0 && FileOffset < FileSize()) {
+                local uint64 currentPosition <hidden=true> = FTell();
+                FSeek(FileOffset);
+                ubyte FileData[ActualSize] <name="File Data">;
+                FSeek(currentPosition);
+            }
+        } FileListing[Header.FileCount] <read=Str("File Size: %u | File Size Compressed: %u | File Offset: %u", this.FileSize, this.FileSizeCompressed, this.FileOffset), optimize=false>;
+    }
+} BIGFILE <name="Legacy of Kain: Soul Reaver I-II | Defiance (Remastered) BIGFILE(.X64).DAT Archive">;
+
+//---------------------------------------------------------------------------------------------------
