@@ -132,14 +132,14 @@ typedef struct {
     ushort FileCount <name="File Count">;
     if (Version == 16) FSkip(4); // Reserved
     if (Version >= 17) uint Unknown <format=hex>;
-} Header <name="Header", read=Str("ARC Version %d | %d Files", this.Version, this.FileCount)>;
+} ARC_HEADER <name="Header", read=Str("ARC Version %d | %d Files", this.Version, this.FileCount)>;
 
 typedef struct {
-    char FileName[64] <name="File Name">;
+    char FileName[64]         <name="File Name">;
     FORMAT_TYPE FormatHash    <name="File Format Extension Hash", comment="CRC32", format=hex>;
     uint FileSizeCompressed   <name="File Size (Compressed)",     comment="ZLib or LZX">;
     uint FileSizeUncompressed <name="File Size (Uncompressed)",   comment="Flagged with 0x40000000">;
-    if (header.Version == 9) FORMAT_TYPE FormatHash2 <format=hex>;
+    if (Header.Version == 9) FORMAT_TYPE FormatHash2 <format=hex>;
     uint FileOffset <name="File Offset", comment="Absolute">;
 
     local uint RealUncompressedSize <hidden=true> = FileSizeUncompressed & 0x3FFFFFFF;
@@ -151,14 +151,14 @@ typedef struct {
         byte FileData[ActualSize] <name="File Data">;
         FSeek(CurrentPosition);
     }
-} Files <name="Files", read=Str("%s | File Size: %u bytes | File Offset: %u | File Type: %s", this.FileName, this.FileSizeCompressed, this.FileOffset, EnumToString(this.FormatHash))>;
+} ARC_ENTRY <read=Str("%s | File Size: %u bytes | File Offset: %u | File Type: %s", this.FileName, this.FileSizeCompressed, this.FileOffset, EnumToString(this.FormatHash))>;
 
 //-------------------------------------------------------------------------------------------------
 
 struct {
-    Header header;
-    if (header.Magic == "0x00435241") BigEndian(); else LittleEndian();
-    if (header.FileCount > 0) Files files[header.FileCount] <name="Files", comment="File Entry", optimize=false>;
-} ARC <name="CAPCOM MT Framework .ARC File">;
+    ARC_HEADER Header;
+    if (Header.Magic == "0x00435241") BigEndian(); else LittleEndian();
+    if (Header.FileCount > 0) ARC_ENTRY Entries[Header.FileCount] <optimize=false>;
+} ARC <name="CAPCOM MT Framework .ARC Archive">;
 
 //-------------------------------------------------------------------------------------------------

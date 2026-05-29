@@ -30,7 +30,7 @@ typedef struct {
     uint ShaderCount  <name="Shader Count">;
     Shaders shaders[ShaderCount];
     uint TextureCount <name="Texture Count", comment="The amount of textures used by the model">;
-} Header <name="Header", read=Str("Model Type: %s | %u Textures", this.Magic, this.TextureCount)>;
+} Header <name="Header", read=Str("Model Type: %s| %u Textures", this.Magic, this.TextureCount)>;
 
 typedef struct {
     char Texture[31]  <comment="Corresponds to a set of DDS files (diffuse / norm / spec and gloss) with the same name in TEX folder">;
