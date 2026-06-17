@@ -15,35 +15,34 @@
 // On the other hand SPAK archives file names are fixed to 120 chars and must divide the file table size by 128 instead
 
 typedef struct {
-    char Magic[4]        <name="Magic",             comment="PACK = QUAKE 1 & 2 etc. | SPAK = SiN">;
-    uint FileTableOffset <name="File Table Offset", comment="Where the file listings start">;
-    uint FileTableSize   <name="File Table Size",   comment="Divide by 64 to get the amount of files in the archive if it's PACK, 128 if it's an SPAK archive">;
-} Header <name="Header", read=Str("Archive Magic: %s | File Table: %u | File Table Offset: %u", this.Magic, this.FileTableSize, this.FileTableOffset)>;
+    char Magic[4]        <comment="PACK = QUAKE 1 & 2 etc. | SPAK = SiN">;
+    uint fileTableOffset <name="File Table Offset", comment="Where the file listings start">;
+    uint fileTableSize   <name="File Table Size",   comment="Divide by 64 to get the amount of files in the archive if it's PACK, 128 if it's an SPAK archive">;
+} PAK_HEADER <read=Str("Archive Magic: %s | File Table: %u | File Table Offset: %u", this.Magic, this.fileTableSize, this.fileTableOffset)>;
 
 typedef struct {
-    if (header.Magic == "PACK") char FileName[56] <name="File Name", comment="Fixed to 56 bytes">;
-    else char FileName[120] <name="File Name", comment="Fixed to 120 bytes">;
-    uint FileOffset <name="File Offset", comment="Relative (Right after the header)">;
-    uint FileSize <name="File Size">;
+    if (Header.Magic == "PACK") char fileName[56] <name="File Name",   comment="Fixed to 56 bytes">;
+    else char fileName[120]                       <name="File Name",   comment="Fixed to 120 bytes">;
+    uint fileOffset                               <name="File Offset", comment="Relative">;
+    uint fileSize                                 <name="File Size">;
 
     local uint64 currentPosition <hidden=true> = FTell();
-    FSeek(FileOffset);
-    byte FileData[FileSize] <name="File Data">;
+    FSeek(fileOffset);
+    if (fileSize > 0) byte fileData[fileSize] <name="File Data">;
     FSeek(currentPosition);
-} FileEntry <name="Files", read=Str("File: %s | File Size: %u bytes | File Offset: %u", this.FileName, this.FileSize, this.FileOffset)>;
+} PAK_ENTRY <read=Str("File: %s | File Size: %u bytes | File Offset: %u", this.fileName, this.fileSize, this.fileOffset)>;
 
 //-------------------------------------------------------
 
 struct {
-    Header header;
-    if (header.Magic == "PACK") {
-        FSeek(header.FileTableOffset);
-        FileEntry files[header.FileTableSize / 64] <optimize=false>;
+    PAK_HEADER Header;
+    if (Header.Magic == "PACK") {
+        FSeek(Header.fileTableOffset);
+        PAK_ENTRY Files[Header.fileTableSize / 64] <optimize=false>;
+    } else if (header.Magic == "SPAK") {
+        FSeek(Header.fileTableOffset);
+        PAK_ENTRY Files[Header.fileTableSize / 128] <optimize=false>;
     }
-    else if (header.Magic == "SPAK") {
-        FSeek(header.FileTableOffset);
-        FileEntry files[header.FileTableSize / 128] <optimize=false>;
-    }
-} idT2PAK <name="id Software id Tech 2 .PAK Archive">;
+} PAK <name="id Software id Tech 2 .PAK Archive">;
 
 //-------------------------------------------------------

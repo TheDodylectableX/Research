@@ -15,13 +15,13 @@ LittleEndian();
 #include "../Common.bt"
 
 typedef struct {
-    uint FileSize      <name="File Size">;
+    uint fileSize      <name="File Size">;
     uint64 Version;
-    uint64 VertexCount <name="Vertex Count">;
-    uint64 FaceCount   <name="Face Count">;
-    uint64 MeshCount   <name="Mesh Count">;
+    uint64 vertexCount <name="Vertex Count">;
+    uint64 faceCount   <name="Face Count">;
+    uint64 meshCount   <name="Mesh Count">;
     FSkip(16); // Offset | Pointer storage area for the engine
-} Header <name="Header", read=Str("%u Meshes | %u Vertices | %u Faces | File Size: %u bytes", this.MeshCount, this.VertexCount, this.FaceCount / 3, this.FileSize)>;
+} MSH_HEADER <read=Str("%u Meshes | %u Vertices | %u Faces | File Size: %u bytes", this.meshCount, this.vertexCount, this.faceCount / 3, this.fileSize)>;
 
 typedef struct {
     VEC3F Positions;
@@ -30,27 +30,27 @@ typedef struct {
     VEC4UB Normals;
     VEC4UB Tangents;
     VEC4UB PackedData; // No idea what this is but it's not Vertex Color
-} Vertices <name="Vertices">;
+} MSH_VERTEX;
 
 typedef struct {
-    uint Index;
-    uint MaterialFaceStart   <name="Material Face Start">;
-    uint MaterialFaceEnd     <name="Material Face End">;
-    uint64 Unknown           <format=hex>;
-    uint MaterialVertexStart <name="Material Vertex Start">;
-    uint MaterialVertexEnd   <name="Material Vertex Start">;
-    uint TextureCount        <name="Texture Start">; // Maybe?
-    VEC4F BoundingBoxMin     <name="Mesh Bounding Box Minimum">;
-    VEC4F BoundingBoxMax     <name="Mesh Bounding Box Maximum">;
-} Material <name="Material">;
+    uint   Index;
+    uint   materialFaceStart   <name="Material Face Start">;
+    uint   materialFaceEnd     <name="Material Face End">;
+    uint64 Unknown             <format=hex>;
+    uint   materialVertexStart <name="Material Vertex Start">;
+    uint   materialVertexEnd   <name="Material Vertex Start">;
+    uint   textureCount        <name="Texture Start">; // Maybe?
+    VEC4F  boundingBoxMin      <name="Mesh Bounding Box Minimum">;
+    VEC4F  boundingBoxMax      <name="Mesh Bounding Box Maximum">;
+} MSH_MATERIAL;
 
 //------------------------------------------------------------------------------------------------
 
 struct {
-    Header header;
-    if (header.VertexCount > 0) Vertices vertices[header.VertexCount] <optimize=false>;
-    if (header.FaceCount > 0)   VEC3US Faces[header.FaceCount / 3]    <optimize=false>;
-    if (header.MeshCount > 0)   Material material[header.MeshCount]   <optimize=false>;
+    MSH_HEADER Header;
+    if (Header.vertexCount > 0) MSH_VERTEX Vertices[Header.vertexCount] <optimize=false>;
+    if (Header.faceCount > 0)   VEC3US Faces[Header.faceCount / 3]      <optimize=false>;
+    if (Header.meshCount > 0)   MSH_MATERIAL Material[Header.meshCount] <optimize=false>;
 } MSH <name="Tomb Raider: Angel of Darkness Remastered .MSH Static Mesh">;
 
 //------------------------------------------------------------------------------------------------

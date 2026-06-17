@@ -23,58 +23,61 @@ local ushort INDEXVersionSwitch <hidden=true>;
 typedef struct {
     
     BigEndian();
-    ubyte INDEXType      <name="INDEX Type",   comment="4 = Index / 5 = Resources">;
+    ubyte INDEXType     <name="INDEX Type",   comment="4 = Index / 5 = Resources">;
     char Magic[3]       <name="Magic",         comment="Always SER">;
     ushort INDEXVersion <name="INDEX Version", comment="The version of the INDEX">; INDEXVersionSwitch = INDEXVersion;
-    if (INDEXVersion == 3) LittleEndian(); String ReferencedIndex <name="Referenced INDEX", comment="The referenced INDEX that houses all file listings of the game">;
+    if (INDEXVersion == 3) { LittleEndian(); String ReferencedIndex <name="Referenced INDEX", comment="The referenced INDEX that houses all file listings of the game">; }
     BigEndian();
     ushort IndexCount <name="Index Count", comment="How many indexes used by the game?">;
-} Header <name="Header", read=Str("INDEX Type: %u | INDEX Magic: %s | INDEX Version: %u | Index Count: %u", this.INDEXType, this.Magic, this.INDEXVersion, this.IndexCount)>;
+} INDEX_HEADER <read=Str("INDEX Type: %u | INDEX Magic: %s | INDEX Version: %u | Index Count: %u", this.INDEXType, this.Magic, this.INDEXVersion, this.IndexCount)>;
+
+//-----------------------------------------------------------------------------------------------
 
 typedef struct {
     LittleEndian();
-    String INDEX    <name="Referenced INDEX File",     comment="A referenced file inside this INDEX">;
-    String Resource <name="Referenced Resources File", comment="A referenced file inside this INDEX">;
-} INDEXListing <name="INDEX Listing", comment="List of all files in this INDEX file", read=Str("INDEX: %s | Resources: %s", this.INDEX.ActualString, this.Resource.ActualString)>;
+    String INDEX    <name="Referenced INDEX File">;
+    String Resource <name="Referenced Resources File">;
+} INDEX_LISTING <name="INDEX Listing", read=Str("INDEX: %s | Resources: %s", this.INDEX.ActualString, this.Resource.ActualString)>;
 
 typedef struct {
     LittleEndian();
     String INDEXFile <name="Referenced INDEX File", comment="A referenced file inside this INDEX">;
-} INDEXListingV2 <name="INDEX Listing", comment="List of all files in this INDEX file", read=this.INDEXFile.ActualString>;
+} INDEX_LISTING_V2 <name="INDEX Listing", read=this.INDEXFile.ActualString>;
 
 typedef struct {
     String Resource;
     ushort ID;
-} ResourcesListing <name="Resources Listing", comment="List of all resources in this INDEX file",
-                    read=Str("Resource: %s | ID: %u", this.Resource.ActualString, this.ID)>;
+} RESOURCES_LISTING <name="Resources Listing", comment="List of all resources in this INDEX file",
+                     read=Str("Resource: %s | ID: %u", this.Resource.ActualString, this.ID)>;
 
 typedef struct {
-    uint SharedResourcesIDsPrimary        <name="Shared Resources IDs (Primary)">;
-    ushort SharedResourcesIDsSecondary[2] <name="Shared Resources IDs (Secondary)">;
+    uint sharedResourcesIDPrimary     <name="Shared Resources ID (Primary)">;
+    ushort sharedResourcesIDSecondary <name="Shared Resources ID (Secondary)">;
+    ushort sharedResourcesIDTertiary  <name="Shared Resources ID (Tertiary)">;
     LittleEndian();
-    String SharedResource <name="Shared Resources">;
-} SharedResourcesListing  <name="Shared Resources Listing", comment="List of all shared resources in this INDEX file",
-                           read=Str("Shared Resource: %s", this.SharedResource.ActualString)>;
+    String sharedResource             <name="Shared Resource">;
+} SHARED_RESOURCES_LISTING <name="Shared Resources Listing", comment="List of all shared resources in this INDEX file",
+                            read=Str("Shared Resource: %s", this.sharedResource.ActualString)>;
 
 //-----------------------------------------------------------------------------------------------
 
 struct {
-    Header header;
-    if (INDEXVersionSwitch < 3 && header.IndexCount > 0)       INDEXListing   indexListing[header.IndexCount] <optimize=false>;
-    else if (INDEXVersionSwitch >= 3 && header.IndexCount > 0) INDEXListingV2 indexListing[header.IndexCount] <optimize=false>;
+    INDEX_HEADER Header;
+    if      (INDEXVersionSwitch < 3  && Header.IndexCount > 0) INDEX_LISTING    INDEXListing[Header.IndexCount] <optimize=false>;
+    else if (INDEXVersionSwitch >= 3 && Header.IndexCount > 0) INDEX_LISTING_V2 INDEXListing[Header.IndexCount] <optimize=false>;
 
     // Resources section only applies to versions < 3 but not 0
     if (INDEXVersionSwitch < 3 && INDEXVersionSwitch != 0) {
         BigEndian();
-        uint ResourceCount <name="Resources Count">;
+        uint resourceCount <name="Resources Count">;
         LittleEndian();
-        ResourcesListing resourcesListing[ResourceCount] <optimize=false>;
+        RESOURCES_LISTING resourcesListing[resourceCount] <optimize=false>;
     }
 
     if (INDEXVersionSwitch == 2) {
         BigEndian();
-        uint SharedResourcesCount <name="Shared Resources Count">;
-        SharedResourcesListing sharedResourcesListing[SharedResourcesCount] <optimize=false>;
+        uint sharedResourcesCount <name="Shared Resources Count">;
+        if (sharedResourcesCount > 0) SHARED_RESOURCES_LISTING sharedResourcesListing[sharedResourcesCount] <optimize=false>;
     }
 } INDEX <name="id Software id Tech 5 ''master.index'' File">;
 

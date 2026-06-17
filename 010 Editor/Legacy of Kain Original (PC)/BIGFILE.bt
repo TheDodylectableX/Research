@@ -41,7 +41,7 @@ struct {
         struct { uint FileHash <name="File Hash", comment="CRC32", format=hex>; } Hashes[FileCount] <read=FileHash, optimize=false>;
 
         struct {
-            uint FileSize     <name="File Size">;
+            uint   FileSize   <name="File Size">;
             uint64 FileOffset <name="File Offset">;
 
             local uint64 currentPosition <hidden=true> = FTell();
@@ -59,8 +59,8 @@ struct {
         struct { uint FileHash <name="File Hash", comment="CRC32", format=hex>; } Hashes[Header.FileCount] <read=Str("File Hash: %u", this.FileHash), optimize=false>;
 
         struct {
-            uint64 FileSize   <name="File Size (Uncompressed)">;
-            uint64 FileOffset <name="File Offset">;
+            uint64 FileSize           <name="File Size (Uncompressed)">;
+            uint64 FileOffset         <name="File Offset">;
             uint64 FileSizeCompressed <name="File Size (Compressed)">;
 
             local uint ActualSize = (FileSizeCompressed == 0) ? FileSize : FileSizeCompressed;

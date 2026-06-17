@@ -17,28 +17,29 @@ typedef enum <ushort> {
     RGBA32 = 3,
     DXT1   = 5,
     DXT5   = 9
-} FORMAT;
+} IMAGE_FORMAT;
 
 //-------------------------------------------------------------------------------------------------------------
 
 typedef struct {
     uint imageCount    <name="Image Count">;
-    char imageName[28] <name="Image Name">;
-} Header <name="Header", read=Str("%u Images", this.imageCount)>;
+    char imageName[28] <name="Image Name", comment="Can be empty in some archives">;
+} VRM_HEADER <read=Str("%u Images", this.imageCount)>;
 
 typedef struct {
-    ushort imageID     <name="Image ID">; // Some have identical IDs
-    FORMAT imageFormat <name="Image Format">;
-    ushort imageWidth  <name="Image Width">, imageHeight <name="Image Height">;
-    uint   imageSize   <name="Image Size">,  imageFlags  <name="Image Flags">;
-    byte   imageData[imageSize] <name="Image Data">;
-} Image <name="Images", read=Str("Image ID: %u | Image Format: %s | Image Dimensions: %ux%u | Image Size: %u bytes", this.imageID, EnumToString(this.imageFormat), this.imageWidth, this.imageHeight, this.imageSize)>;
+    ushort       imageID     <name="Image ID", comment="Some images have identical IDs">;
+    IMAGE_FORMAT imageFormat <name="Image Format">;
+    ushort       imageWidth  <name="Image Width">, imageHeight   <name="Image Height">;
+    uint         imageSize   <name="Image Size">,  imageMipCount <name="Image Mip Map Count">;
+    byte         imageData[imageSize] <name="Image Data">;
+} VRM_ENTRY <read=Str("Image ID: %u | Image Format: %s | Image Dimensions: %ux%u | Image Size: %u bytes",
+                      this.imageID, EnumToString(this.imageFormat), this.imageWidth, this.imageHeight, this.imageSize)>;
 
 //-------------------------------------------------------------------------------------------------------------
 
 struct {
-    Header header;
-    if (header.imageCount > 0) Image images[header.imageCount] <optimize=false>;
+    VRM_HEADER Header;
+    if (Header.imageCount > 0) VRM_ENTRY Images[Header.imageCount] <optimize=false>;
 } VRM <name="Legacy of Kain: Soul Reaver | Defiance (Remastered) (.X64).VRM Image Container">;
 
 //-------------------------------------------------------------------------------------------------------------

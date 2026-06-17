@@ -17,62 +17,62 @@ LittleEndian();
 typedef struct {
     VEC4F Origin;
     float Radius;
-    FSkip(12); // Padding
-} COLLIDESPHERE;
+    FSkip(12); // Reserved
+} COLLIDE_SPHERE;
 
 typedef enum <ushort> { // Padded byte entry
-  DRAWPT_POINTLIST = 0x1,
-  DRAWPT_LINELIST = 0x2,
-  DRAWPT_LINESTRIP = 0x3,
-  DRAWPT_TRIANGLELIST = 0x4,
+  DRAWPT_POINTLIST     = 0x1,
+  DRAWPT_LINELIST      = 0x2,
+  DRAWPT_LINESTRIP     = 0x3,
+  DRAWPT_TRIANGLELIST  = 0x4,
   DRAWPT_TRIANGLESTRIP = 0x5,
-  DRAWPT_TRIANGLEFAN = 0x6,
+  DRAWPT_TRIANGLEFAN   = 0x6,
 } DRAW_PRIMITIVETYPE;
 
 //---------------------------------------------------------------------
 
 typedef struct {
     uint Magic;
-    uint textureDataOffset <name="Texture Data Offset">;
-    uint skeletonDataOffset <name="Skeleton Data Offset">;
-    uint Unknown;
+    uint textureDataOffset     <name="Texture Data Offset">;
+    uint skeletonDataOffset    <name="Skeleton Data Offset">;
+    uint Unknown               <format=hex>;
     uint primaryMeshDataOffset <name="Primary Mesh Data Data Offset">;
-    uint boneCount <name="Bone Count">;
-} Header <name="Header">;
+    uint boneCount             <name="Bone Count">;
+} CHR_HEADER;
 
 typedef struct (uint boneCount) {
     struct {
-        int boneFlags <name="Bone Flags">;
-        char boneName[64] <name="Bone Name">;
-        int boneID <name="Bone ID">;
-        int boneIndex <name="Bone Index">;
-        int matrixIndex <name="Bone Matrix Index">;
-        VEC4F bindPose[4] <name="Bone Bind Pose">;
-        VEC4F absoluteBind[4] <name="Bone Absolute Bind Pose">;
-        VEC4F preTransform[4] <name="Bone Pre-Transform Pose">;
+        int   boneFlags        <name="Bone Flags">;
+        char  boneName[64]     <name="Bone Name">;
+        int   boneID           <name="Bone ID">;
+        int   boneIndex        <name="Bone Index">;
+        int   matrixIndex      <name="Bone Matrix Index">;
+        VEC4F bindPose[4]      <name="Bone Bind Pose">;
+        VEC4F absoluteBind[4]  <name="Bone Absolute Bind Pose">;
+        VEC4F preTransform[4]  <name="Bone Pre-Transform Pose">;
         VEC4F postTransform[4] <name="Bone Post-Transform Pose">;
-        COLLIDESPHERE sphere <name="Collide Sphere">;
-        int physicsFlags <name="Physics Flags">;
-        uint parentBone <name="Bone Parnet">;
-        FSkip(72); // Padding
+        COLLIDE_SPHERE Sphere  <name="Collide Sphere">;
+        int   physicsFlags     <name="Physics Flags">;
+        uint  parentBone       <name="Bone Parent">;
+        FSkip(72); // Reserved
     } Bone[boneCount] <read=boneName, optimize=false>;
 } SkeletonData;
 
 //---------------------------------------------------------------------
 
 typedef struct {
-    VEC3SS primaryPositions <name="Primary Positions">;
+    VEC3SS primaryPositions   <name="Primary Positions">;
     VEC3SS secondaryPositions <name="Secondary Positions">;
-    VEC3SB primaryNormals <name="Primary Normals">;
-    VEC3SB secondaryNormals <name="Secondary Normals">;
-    VEC3SB primaryTangents <name="Primary Tangents">;
-    VEC3SB primaryBinormals <name="Primary Binormals">;
-    VEC3SB secondaryTangents <name="Secondary Tangents">;
+    VEC3SB primaryNormals     <name="Primary Normals">;
+    VEC3SB secondaryNormals   <name="Secondary Normals">;
+    VEC3SB primaryTangents    <name="Primary Tangents">;
+    VEC3SB primaryBinormals   <name="Primary Binormals">;
+    VEC3SB secondaryTangents  <name="Secondary Tangents">;
     VEC3SB secondaryBinormals <name="Secondary Binormals">;
-    short BoneWeight <name="Bone Weights">;
-    ubyte BoneIndices[2] <name="Bone Indices">;
+    short  BoneWeight         <name="Bone Weights">;
+    ubyte  BoneIndices[2]     <name="Bone Indices">;
     VEC2SS UV;
-} SYS_D3D_SKIN__VECTOR_WEIGHTED;
+} SYS_D3D_SKIN_VECTOR_WEIGHTED;
 
 typedef struct {
     VEC3SS Positions;
@@ -80,7 +80,7 @@ typedef struct {
     VEC3SB Tangents;
     VEC3SB Binormals;
     VEC2SS UV;
-} SYS_D3D_SKIN__VECTOR_RIGGED;
+} SYS_D3D_SKIN_VECTOR_RIGGED;
 
 typedef struct {
     uint faceCount <name="Face Count">;
@@ -90,32 +90,32 @@ typedef struct {
 typedef struct {
     uint numRuns;
     struct Elements {  
-        short primitiveCount <name="Primitive Count">;
-        short faceCount <name="Face Count">;
-        short indicesStart <name="Face Index Start">;
-        ushort materialIndex <name="Material Index">;
-        short textureBumpIndex <name="Texture Bump Index">;
+        short  primitiveCount       <name="Primitive Count">;
+        short  faceCount            <name="Face Count">;
+        short  indicesStart         <name="Face Index Start">;
+        ushort materialIndex        <name="Material Index">;
+        short  textureBumpIndex     <name="Texture Bump Index">;
         DRAW_PRIMITIVETYPE faceType <name="Face Type">;
     } runs[numRuns];
 } RunData;
 
 typedef struct {
-    int Unknown;
-    uint skinID <name="Skin ID">;
+    int Unknown      <format=hex>;
+    uint skinID      <name="Skin ID">;
     uint vertexCount <name="Vertex Count">;
-    SYS_D3D_SKIN__VECTOR_WEIGHTED vertices[vertexCount];
+    SYS_D3D_SKIN_VECTOR_WEIGHTED Vertices[vertexCount];
     IndicesData Faces;
     RunData runData;
 } SkinData;
 
 typedef struct {
-    int Unknown;
-    int meshFlags <name="Mesh Flags">;
-    int meshID <name="Mesh Hash", format=hex>;
-    int indexBone <name="Mesh Index Bone">;
+    int Unknown            <format=hex>;
+    int meshFlags          <name="Mesh Flags", format=hex>;
+    int meshID             <name="Mesh Hash",  format=hex>;
+    int indexBone          <name="Mesh Index Bone">;
     int indexAnimationBone <name="Mesh Index Animation Bone">;
-    int vertexCount <name="Vertex Count">;
-    SYS_D3D_SKIN__VECTOR_RIGGED Vertices[vertexCount]<optimize=false>;
+    int vertexCount        <name="Vertex Count">;
+    SYS_D3D_SKIN_VECTOR_RIGGED Vertices[vertexCount] <optimize=false>;
     IndicesData Faces;
     RunData runData;
 } RiggedData;
@@ -123,50 +123,50 @@ typedef struct {
 typedef struct {
     uint Unknown;
     SkinData skinData;
-} Mesh1;
+} CHR_MESH_1;
 
 typedef struct {
     uint numChildren <name="Mesh Count">;
     RiggedData riggedData[numChildren] <optimize=false>;
-} Mesh2;
+} CHR_MESH_2;
 
 //---------------------------------------------------------------------
 
-struct TextureData {
-    uint materialCount <name="Material Count">;
+struct CHR_TEXTURE_DATA{
+    uint materialCount   <name="Material Count">;
     struct Material {
         int textureFlags <name="Texture Flags">;
         int textureCount <name="Texture Count">;
-        int indexTextures[textureCount];
-    } materials[materialCount] <name="Material", optimize=false>;
-    
+        int indexTextures[textureCount] <name="Texture Indices">;
+    } Materials[materialCount] <name="Material", optimize=false>;
+
     uint textureCount <name="Texture Count">;
     struct Texture { // This entire section is unused by the remaster.
         char textureFormat[4] <name="Texture Format", comment="ARGB if empty.">;
         uint textureUse;
-        uint frameCount <name="Texture Frame Count">;
-        uint mipMapCount <name="Texture Mip Map Count">;
-        uint textureWidth <name="Texture Width">;
-        uint textureHeight <name="Texture Height">;
-        uint textureSize <name="Texture Size">;
+        uint frameCount       <name="Texture Frame Count">;
+        uint mipMapCount      <name="Texture Mip Map Count">;
+        uint textureWidth     <name="Texture Width">;
+        uint textureHeight    <name="Texture Height">;
+        uint textureSize      <name="Texture Size">;
         ubyte textureData[textureSize] <name="Texture Data">;
-    } textures[textureCount] <name="Texture", read=textureFormat, optimize=false>;
+    } Textures[textureCount] <name="Texture", read=textureFormat, optimize=false>;
 };
 
 //---------------------------------------------------------------------
 
 struct {
-    Header header;
+    CHR_HEADER Header;
 
-    FSeek(header.skeletonDataOffset);
-    SkeletonData skeleton(header.boneCount) <name="Skeleton", optimize=false>;
+    FSeek(Header.skeletonDataOffset);
+    SkeletonData Skeleton(Header.boneCount) <optimize=false>;
 
-    FSeek(header.primaryMeshDataOffset);
-    Mesh1 mesh1Data <name="Primary Mesh Data", optimize=false>;
-    Mesh2 mesh2Data <name="Secondary Mesh Data", optimize=false>;
+    FSeek(Header.primaryMeshDataOffset);
+    CHR_MESH_1 mesh1Data <name="Primary Mesh Data",   optimize=false>;
+    CHR_MESH_2 mesh2Data <name="Secondary Mesh Data", optimize=false>;
 
-    FSeek(header.textureDataOffset);
-    TextureData textureData <name="Material and Texture Data", optimize=false>;
+    FSeek(Header.textureDataOffset);
+    CHR_TEXTURE_DATA textureData <name="Material and Texture Data", optimize=false>;
 } CHR <name="Tomb Raider: Angel of Darkness (Remastered) .CHR Model">;
 
 //---------------------------------------------------------------------

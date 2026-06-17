@@ -33,10 +33,10 @@ typedef struct {
     ushort Version;
     ushort fileCount    <name="File Count", comment="Not always filled.">;
     uint fileNameLength <name="File Name Length", comment="Always 8 characters long">;
-} Header <name="Header", read=Str("MUK Archive Version %u | %u Files", this.Version, this.fileCount)>;
+} MUK_HEADER <read=Str("MUK Archive Version %u | %u Files", this.Version, this.fileCount)>;
 
 typedef struct {
-    char fileName[header.fileNameLength] <name="File Name">;
+    char fileName[Header.fileNameLength] <name="File Name">;
     ASSET_TYPE fileType <name="File Type", comment="This only exists on the PC version">;
     uint fileSize       <name="File Size">;
     uint fileOffset     <name="File Offset", comment="Absolute">;
@@ -45,7 +45,7 @@ typedef struct {
     FSeek(fileOffset);
     if (fileSize > 0) byte fileData[fileSize] <name="File Data">;
     FSeek(currentPosition);
-} File <read=Str("%s | File Type: %s | File Size: %u bytes | File Offset: %u", this.fileName, EnumToString(this.fileType), this.fileSize, this.fileOffset)>;
+} MUK_ENTRY <read=Str("%s | File Type: %s | File Size: %u bytes | File Offset: %u", this.fileName, EnumToString(this.fileType), this.fileSize, this.fileOffset)>;
 
 /* // Structure for MASTER.MUK from the PS1 version, Header and fileType don't exist on there.
 struct {
@@ -63,15 +63,14 @@ struct {
 //--------------------------------------------------------------------------------
 
 struct {
-    Header header;
-
+    MUK_HEADER Header;
     struct {
-        local int remainingFiles <hidden=true> = header.fileCount;
+        local int remainingFiles <hidden=true> = Header.fileCount;
         while (remainingFiles > 0) {
             struct {
                 local int chunkCount <name="Chunk Count"> = (remainingFiles > 256) ? 256 : remainingFiles;
 
-                File entries[chunkCount] <name="Entry", optimize=false>;
+                MUK_ENTRY Entries[chunkCount] <optimize=false>;
                 uint nextChunkOffset <name="Next Chunk Offset">;
             } Chunk;
             remainingFiles -= 256;

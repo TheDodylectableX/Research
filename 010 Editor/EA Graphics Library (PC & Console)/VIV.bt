@@ -16,28 +16,28 @@ BigEndian();
 typedef struct {
     char Magic[4];
     //LittleEndian();
-    uint FileSize   <name="File Size", comment="Stored in LE for some games.">;
+    uint fileSize   <name="File Size", comment="Stored in LE for some games.">;
     BigEndian();
-    uint FileCount  <name="File Count">;
-    uint HeaderSize <name="Header Size", comment="Total size of header (16 bytes) + All file entries.">;
-} Header <name="Header", read=Str("%s Archive | %u bytes | %u Files", this.Magic, this.FileSize, this.FileCount)>;
+    uint fileCount  <name="File Count">;
+    uint headerSize <name="Header Size", comment="Total size of header (16 bytes) + All file entries.">;
+} VIV_HEADER <read=Str("%s Archive | %u bytes | %u Files", this.Magic, this.fileSize, this.fileCount)>;
 
 typedef struct {
-    uint fileOffset <name="File Offset">;
-    uint fileSize <name="File Size">;
-    string fileName <name="File Name">;
+    uint   fileOffset <name="File Offset">;
+    uint   fileSize   <name="File Size">;
+    string fileName   <name="File Name">;
     
     local uint64 currentPosition <hidden=true> = FTell();
     FSeek(fileOffset);
     if (fileSize > 0) byte fileData[fileSize] <name="File Data">;
     FSeek(currentPosition);
-} Entry <name="File Entry", read=Str("%s | File Size: %u | File Offset: %u", this.fileName, this.fileSize, this.fileOffset)>;
+} VIV_ENTRY <read=Str("%s | File Size: %u | File Offset: %u", this.fileName, this.fileSize, this.fileOffset)>;
 
 //----------------------------------------------------------------------
 
 struct {
-    Header header;
-    Entry files[header.FileCount] <optimize=false>;
+    VIV_HEADER Header;
+    if (Header.fileCount > 0) VIV_ENTRY Entries[Header.fileCount] <optimize=false>;
 } VIV <name="EA Graphics Library Engine .VIV | .BIG Archive">;
 
 //----------------------------------------------------------------------

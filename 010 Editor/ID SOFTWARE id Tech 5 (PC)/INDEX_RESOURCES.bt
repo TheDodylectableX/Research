@@ -14,18 +14,20 @@
 #include "../Common.bt"
 
 typedef struct {
+    char Language[16]     <name="Platform Stream Data Language">;
+    uint streamDataOffset <name="Platform Stream Data Offset">;
+    uint streamDataSize   <name="Platform Stream Data Size">;
+} idPlatformStreamData;
+
+//------------------------------------------------------------------------------------------
+
+typedef struct {
     BigEndian();
     ubyte INDEXType <name="INDEX Type", comment="2 = Index / 3 = Resources">;
     char Magic[3]   <name="Magic", comment="Always SER">;
     uint INDEXSize  <name="INDEX Size", comment="Size of this file minus 32 bytes">;
     FSkip(24); // Reserved
-} Header;
-
-typedef struct {
-    char Language[16]     <name="Platform Stream Data Language">;
-    uint streamDataOffset <name="Platform Stream Data Offset">;
-    uint streamDataSize   <name="Platform Stream Data Size">;
-} idPlatformStreamData;
+} INDEX_HEADER;
 
 typedef struct {
     BigEndian();
@@ -40,17 +42,17 @@ typedef struct {
     uint resourceSizeCompressed <name="Resource Size (Compressed)", comment="ZLib">;
     uint idPlatformStreamDataCount <name="Platform Stream Data Count">;
     if (idPlatformStreamDataCount > 0) idPlatformStreamData platformStreamData[idPlatformStreamDataCount] <name="Platform Stream Data", optimize=false>;
-    uint useBits;
-    ubyte resourceID <name="Resource ID">;
-} ResourceEntry;
+    uint useBits <name="Use Bits?">;
+    ubyte resourceUnknown <name="Resource Unknown">;
+} RESOURCES_ENTRY;
 
 //------------------------------------------------------------------------------------------
 
 struct {
-    Header header <name="Header">;
-    uint fileCount <name="File Count">;
+    INDEX_HEADER Header;
+    uint fileCount      <name="File Count">;
     uint totalFileCount <name="Total File Count">;
-    if (totalFileCount > 0) ResourceEntry entry[totalFileCount] <name="Resource Entry", optimize=false>;
+    if (totalFileCount > 0) RESOURCES_ENTRY Entry[totalFileCount] <optimize=false>;
 } INDEX <name="id Software id Tech 5 .INDEX File">;
 
 //------------------------------------------------------------------------------------------

@@ -44,7 +44,7 @@ typedef struct (uint blockSize) {
     local int64 blockStart <hidden=true> = FTell();
     // Continue parsing entries until we've consumed the allocated bytes.
     while (FTell() < blockStart + blockSize) { struct REZ_ENTRY Entry; }
-} REZ_DIR_BLOCK;
+} REZ_DIRECTORY_BLOCK;
 
 typedef struct { // Either a directory or a file.
     ENTRY_TYPE entryType <name="Entry Type">;
@@ -58,12 +58,12 @@ typedef struct { // Either a directory or a file.
         if (Offset > 0 && Size > 0) {
             local int64 returnPosition <hidden=true> = FTell();
             FSeek(Offset);
-            struct REZ_DIR_BLOCK childDirectory(Size) <name="Child Directory">;
+            struct REZ_DIRECTORY_BLOCK childDirectory(Size) <name="Child Directory">;
             FSeek(returnPosition);
         }
     } 
     else if (entryType == 0) { //--- FILE
-        uint   Offset       <name="File Offset", comment="Absolute">;
+        uint   Offset       <name="File Offset",    comment="Absolute">;
         uint   Size         <name="File Size">;
         time_t Time         <name="File Date">;
         uint   ID           <name="File ID">;
@@ -86,7 +86,7 @@ struct {
     REZ_HEADER header;
     if (header.RootDirectoryOffset > 0 && header.RootDirectorySize > 0) {
         FSeek(header.RootDirectoryOffset);
-        struct REZ_DIR_BLOCK RootDirectory(header.RootDirectorySize) <name="Root Directory">;
+        struct REZ_DIRECTORY_BLOCK RootDirectory(header.RootDirectorySize) <name="Root Directory">;
     } else { Warning("This archive doesn't appear to have a valid root directory."); }
 } REZ <name="Monolith Productions LithTech .REZ Archive">;
 

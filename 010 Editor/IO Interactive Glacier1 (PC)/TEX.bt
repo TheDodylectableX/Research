@@ -1,0 +1,130 @@
+//---------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: TEX.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering IO Interactive's Glacier1 texture archives
+//  Category: Images / Textures
+// File Mask: *.TEX
+//  ID Bytes: 
+//   History: 
+//---------------------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+local uint   i <hidden=true>;
+local uint64 g_dataEndOffset <hidden=true> = 0;
+
+typedef struct {
+    uint mipSize <name="Mip Size">;
+    if (mipSize > 0) byte mipData[mipSize] <name="Mip Data">;
+} TEX_MIP <read=Str("Mip Size: %u bytes", this.mipSize)>;
+
+typedef struct {
+    uint paletteCount <name="Palette Count">;
+    if (paletteCount > 0) VEC4UB Palettes[paletteCount];
+} TEX_PALETTE <read=Str("%u Palettes", this.paletteCount)>;
+
+typedef struct {
+    uint Count;
+    uint relatedIDs[Count];
+} TEX_TRAILER;
+
+int knownFormatList(string s) { return (s == "ABGR" || s == "1TXD" || s == "3TXD" || s == "NLAP" || s == "8V8U" || s == "  8I"); }
+
+//---------------------------------------------------------------------------
+
+typedef struct {
+    uint dataEndOffset       <name="End Data Offset",       comment="Total file size minus 16384 bytes">;
+    uint dataSecondaryOffset <name="Secondary Data Offset", comment="Total file size minus 8192 bytes">;
+    uint formatCount         <name="Format Count?",          comment="Corresponds to how many unique formats used in this archive?">; // This is 0 on Blood Money
+    uint Version; // Not sure
+} TEX_HEADER;
+
+typedef struct {
+    local int64 entryStart <hidden=true> = FTell();
+
+    uint   imageSize         <name="Image Size", comment="Size of image data + header metadata">;
+    char   imageFormat[4]    <name="Image Format">;
+    char   imageFormatDup[4] <hidden=true>;
+    uint   imageID           <name="Image Global ID">;
+    ushort imageWidth        <name="Image Width">;
+    ushort imageHeight       <name="Image Height">;
+    uint   imageMipCount     <name="Image Mip Map Count">;
+    uint   imageFlagA        <name="Image Flags Primary", format=hex>;
+    uint   imageFlagB        <name="Image Flags Secondary", comment="This is a floating point on Blood Money / Mini Ninjas", format=hex>;
+    FSkip(4); // Reserved
+    string imageName         <name="Image Name", comment="May include subdirectories">;
+
+    struct { for (i = 0; i < imageMipCount; i++) TEX_MIP Mip; } ImageData <name="Image Data">;
+    // PALN: Palette appended after the indexed pixel data.
+    if (Memcmp(imageFormat, "NLAP", 4) == 0) TEX_PALETTE Palette;
+
+    // Detect which of three patterns apply by checking which one puts a valid image format at the next entry's position.
+    local int64 postPosition <hidden=true> = FTell();
+    if (postPosition < g_dataEndOffset) {
+        local int64  scanPosition <hidden=true> = postPosition;
+        local int    Found        <hidden=true> = 0;
+        local string testFormat   <hidden=true>;
+        local uint   testSize     <hidden=true>;
+        while (scanPosition + 8 <= g_dataEndOffset) {
+            testFormat = ReadString(scanPosition + 4, 4);
+            testSize   = ReadUInt(scanPosition);
+            if (knownFormatList(testFormat) && testSize >= 36 &&
+                scanPosition + testSize <= g_dataEndOffset) {
+                Found = 1;
+                break;
+            }
+            scanPosition += 1;
+        }
+
+        // If the scan didn't find a valid entry then treat all remaining bytes up to the data end as the gap.
+		// This is required for Blood Money / Mini Ninjas' entries with alignment padding at the end of the image data.
+        if (!Found) scanPosition = g_dataEndOffset;
+
+        local int64 gapSize <hidden=true> = scanPosition - postPosition;
+        if (gapSize > 0) {
+            // Find first non-zero byte in the gap.
+            local int64 trailerStart <hidden=true> = postPosition;
+            while (trailerStart < scanPosition && ReadUByte(trailerStart) == 0) trailerStart += 1;
+
+            if (trailerStart >= scanPosition) { byte alignPadding[gapSize]; } // All zeros: Alignment padding (Blood Money / Mini Ninjas Specific)
+            else {
+                // Try to recognize trailer structure (Count and IDs)
+                local uint trailerCount <hidden=true> = ReadUInt(trailerStart);
+                local int64 trailerEnd  <hidden=true> = trailerStart + 4 + trailerCount * 4;
+
+                if (trailerCount > 0 && trailerCount < 256 && trailerEnd <= scanPosition) {
+                    if (trailerStart > postPosition) byte PrePadding[trailerStart - postPosition];
+                    TEX_TRAILER Trailer;
+                    if (FTell() < scanPosition) byte PostPadding[scanPosition - FTell()];
+                } else { byte UnknownPostRecord[gapSize]; } // Non-zero content but doesn't fit trailer shape — opaque dump
+            }
+        }
+    }
+} TEX_ENTRY <read=ReadEntryInfo>;
+
+string ReadEntryInfo(TEX_ENTRY &e) {
+    string s;
+    string actualImageName = (e.imageName == "") ? "Unnamed Texture" : e.imageName;
+    SPrintf(s, "(%u) | %s | (%ux%u | %s%s%s%s | %u Mips)",
+            e.imageID, actualImageName,
+            e.imageWidth, e.imageHeight,
+            e.imageFormat[3], e.imageFormat[2], e.imageFormat[1], e.imageFormat[0],
+            e.imageMipCount);
+    return s;
+}
+
+//---------------------------------------------------------------------------
+
+struct {
+    TEX_HEADER Header;
+    g_dataEndOffset = Header.dataEndOffset;
+    struct {
+        while (FTell() < g_dataEndOffset) TEX_ENTRY Entries <optimize=false>;
+    } Images;
+    if (FileSize() > g_dataEndOffset) byte FileTrailer[FileSize() - g_dataEndOffset];
+} TEX <name="IO Interactive Glacier1 .TEX Texture Archive">;
+
+//---------------------------------------------------------------------------

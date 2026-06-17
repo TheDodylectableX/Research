@@ -1,0 +1,111 @@
+//---------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: FKNL.bt
+//   Authors: Dodylectable, Luigi Auriemma (Initial Research)
+//   Version: 1.0
+//   Purpose: Reverse engineering Quake III Revolution's archive
+//  Category: Archives
+// File Mask: LINKFILE.LNK
+//  ID Bytes: 46 4B 4E 4C
+//   History: 
+//---------------------------------------------------------------
+
+// Uses proprietary compression from Dungeon Keeper 2
+
+LittleEndian();
+
+typedef struct {
+    uint fileNameOffset <name="File Name Offset">;
+
+    local uint64 back <hidden=true> = FTell();
+    if (fileNameOffset > 0 && fileNameOffset < FileSize()) {
+        FSeek(fileNameOffset);
+        string fileName <name="File Name">;
+        FSeek(back);
+    } else { local string fileName = "INVALID FILE NAME OFFSET"; }
+
+    uint fileOffset           <name="File Offset">;
+    uint fileSizeCompressed   <name="File Size (Compressed)">;
+    uint fileSizeUncompressed <name="File Size (Uncompressed)">;
+
+    local uint32 actualSize <hidden=true> = (fileSizeCompressed == 0) ? fileSizeUncompressed : fileSizeCompressed;
+    if (actualSize > 0 && fileOffset > 0 && fileOffset < FileSize()) {
+        local uint64 dataBack <hidden=true> = FTell();
+        FSeek(fileOffset);
+        byte fileData[actualSize] <name="File Data">;
+        FSeek(dataBack);
+    }
+} FKNL_FILE_ENTRY <read=Str("%s | File Offset: %u | File Size (Uncompressed): %u bytes | File Size (Compressed): %u bytes", this.fileName, this.fileOffset, this.fileSizeUncompressed, this.fileSizeCompressed)>;
+
+typedef struct {
+    uint folderNameOffset <name="Folder Name Offset">;
+    
+    local uint64 back <hidden=true> = FTell();
+    if (folderNameOffset > 0 && folderNameOffset < FileSize()) {
+        FSeek(folderNameOffset);
+        string folderName <name="Folder Name">;
+        FSeek(back);
+    } else { local string folderName = "INVALID FOLDER NAME OFFSET"; }
+
+    uint folderContentOffset <name="Folder Content Offset">;
+
+    if (folderContentOffset > 0 && folderContentOffset < FileSize()) {
+        local uint64 jumpBack <hidden=true> = FTell();
+        FSeek(folderContentOffset);
+        struct FKNL_FOLDER_DATA content <name="Folder Content">;
+        FSeek(jumpBack);
+    }
+} FKNL_FOLDER_ENTRY <read=folderName>;
+
+typedef struct {
+    uint filesOffset   <name="Files Offset">;
+    uint foldersOffset <name="Folders Offset">;
+    uint fileCount     <name="File Count">;
+    uint folderCount   <name="Folder Count">;
+
+    if (fileCount > 0) {
+        local uint64 fileBack <hidden=true> = FTell();
+        FSeek(filesOffset);
+        FKNL_FILE_ENTRY files[fileCount] <name="Files", optimize=false>;
+        FSeek(fileBack);
+    }
+
+    if (folderCount > 0) {
+        local uint64 folderBack <hidden=true> = FTell();
+        FSeek(foldersOffset);
+        FKNL_FOLDER_ENTRY folders[folderCount] <name="Folders", optimize=false>;
+        FSeek(folderBack);
+    }
+} FKNL_FOLDER_DATA <read=Str("%u Files | %u Folders", this.fileCount, this.folderCount)>;
+
+typedef struct {
+    char Magic[4] <comment="Reversed">;
+    uint Flags;
+    uint dataOffset <name="File Data Offset">;
+    if (Flags & 2) {
+        uint tableSizeDecompresed;
+        uint tableSizeCompressed;
+        Warning("Table compression (Flag 2) detected. Offsets may be invalid in raw view.");
+    }
+
+    uint Unknown <format=hex>; 
+
+    uint rootNameOffset <name="Root Folder Name Offset">;
+    local uint64 rootNamePosition <hidden=true> = FTell();
+    FSeek(rootNameOffset);
+    string rootName <name="Root Folder Name", comment="Empty">;
+    FSeek(rootNamePosition);
+
+    uint rootfolderContentOffset <name="Root Folder Content Offset">;
+} FKNL_HEADER;
+
+//------------------------------------------------------------------------------
+
+struct {
+    FKNL_HEADER Header;
+    FSeek(Header.rootfolderContentOffset);
+    FKNL_FOLDER_DATA root <name="Root Directory">;
+} FKNL <name="Bullfrog Productions Quake III Revolution LINKFILE.LNK Archive">;
+
+//------------------------------------------------------------------------------

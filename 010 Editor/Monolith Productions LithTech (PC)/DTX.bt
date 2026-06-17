@@ -17,10 +17,12 @@
 
 LittleEndian();
 
-/* Which flags actually get saved.
-#define DTX_FLAGSAVEMASK    (DTX_FULLBRITE|DTX_32BITSYSCOPY|DTX_PREFER16BIT|\
-                              DTX_SECTIONSFIXED|DTX_PREFER4444|DTX_PREFER5551|\
-                              DTX_CUBEMAP|DTX_BUMPMAP|DTX_LUMBUMPMAP|DTX_NOSYSCACHE) */
+// Which flags actually get saved.
+/*
+#define DTX_FLAGSAVEMASK (DTX_FULLBRITE|DTX_32BITSYSCOPY|DTX_PREFER16BIT|\
+                          DTX_SECTIONSFIXED|DTX_PREFER4444|DTX_PREFER5551|\
+                          DTX_CUBEMAP|DTX_BUMPMAP|DTX_LUMBUMPMAP|DTX_NOSYSCACHE)
+*/
 
 typedef enum <int> {
     SHOGO_BLOOD   = -2, // LithTech V1.0 (Shogo and Blood II) (Uses Palettes)
@@ -67,42 +69,42 @@ typedef enum <ubyte> {
 //------------------------------------------------------------------------------------
 
 typedef struct {
-    uint resourceType  <name="Resource Type", comment="Always 0 for DTX">;
-    ENGINE_VERSION resourceVersion <name="Resource Version">;
-    ushort imageWidth  <name="Image Width",  comment="1024 is the limit">;
-    ushort imageHeight <name="Image Height", comment="1024 is the limit">;
-    ushort mipMapCount <name="Image Mip Map Count", comment="8 is the limit">;
+    uint   resourceType             <name="Resource Type",       comment="Always 0 for DTX">;
+    ENGINE_VERSION resourceVersion  <name="Resource Version">;
+    ushort imageWidth               <name="Image Width",         comment="1024 is the limit">;
+    ushort imageHeight              <name="Image Height",        comment="1024 is the limit">;
+    ushort imageMipCount            <name="Image Mip Map Count", comment="8 is the limit">;
     if (resourceVersion == TALON_JUPITER) {
-        ushort numSections <name="Section Count", comment="Count of extra data blocks at end of file">;
+        ushort numSections          <name="Section Count",       comment="Count of extra data blocks at end of file">;
         ENGINE_FLAGS_V2 engineFlags <name="Engine Flags">;
-        uint surfaceFlags <name="Surface Flags", comment="Varies per game">;
-        ubyte textureGroup <name="Texture Group">;
-        ubyte mipMapsToUse <name="Mip Maps to Use">;
-        IMAGE_FORMAT imageFormat <name="Image Format">;
-        ubyte nonS3TCOffset   <comment="Fallback mip map offset for old hardware">;
-        ubyte uiMipmapOffset  <name="DEdit | World Edit UI Mip Map Offset">;
-        ubyte texturePriority <name="Texture Priority", comment="Texture management weight">;
-        float detailScale     <name="DEdit | World Edit Detail Scale", comment="Engine adds 1.0f automatically to the stored value">;
-        short detailAngle     <name="DEdit | World Edit Detail Angle", comment="In degrees">;
-        char commandString[128] <name="Command String", comment="Editor / Material Commands">;
+        uint   surfaceFlags         <name="Surface Flags",       comment="Varies per game">;
+        ubyte  textureGroup         <name="Texture Group">;
+        ubyte  mipMapsToUse         <name="Mip Maps to Use">;
+        IMAGE_FORMAT imageFormat    <name="Image Format">;
+        ubyte  nonS3TCOffset        <comment="Fallback mip map offset for old hardware">;
+        ubyte  UIMipMapOffset       <name="DEdit | World Edit UI Mip Map Offset">;
+        ubyte  texturePriority      <name="Texture Priority",    comment="Texture management weight">;
+        float  detailScale          <name="DEdit | World Edit Detail Scale", comment="Engine adds 1.0f automatically to the stored value">;
+        short  detailAngle          <name="DEdit | World Edit Detail Angle", comment="In degrees">;
+        char   commandString[128]   <name="Command String",      comment="Editor / Material Commands">;
     }
     else {
-        LIGHT_FLAG lightFlag <name="Light Flag">;
+        LIGHT_FLAG lightFlag        <name="Light Flag">;
         ENGINE_FLAGS_V1 engineFlags <name="Engine Flags">;
-        uint surfaceFlags  <name="Surface Flags", comment="Varies per game">;
-        ubyte textureGroup <name="Texture Group">;
-        ubyte mipMapsToUse <name="Mip Maps to Use">;
-        ubyte alphaCutoff  <name="Alpha Cutoff", comment="From 128 to 255">;
-        ubyte alphaAverage <name="Alpha Average">;
+        uint  surfaceFlags          <name="Surface Flags", comment="Varies per game">;
+        ubyte textureGroup          <name="Texture Group">;
+        ubyte mipMapsToUse          <name="Mip Maps to Use">;
+        ubyte alphaCutoff           <name="Alpha Cutoff", comment="From 128 to 255">;
+        ubyte alphaAverage          <name="Alpha Average">;
         byte  Unknown[16];
     }
-} Header <name="Header", read=Str("Image Dimensions: %ux%u | %u Mip Maps", this.imageWidth, this.imageHeight, this.mipMapCount)>;
+} DTX_HEADER <read=Str("Image Dimensions: %ux%u | %u Mip Maps", this.imageWidth, this.imageHeight, this.imageMipCount)>;
 
 //------------------------------------------------------------------------------------
 
 struct {
-    Header header;
-    if (header.resourceVersion != TALON_JUPITER) COLOR Palette[256] <name="Color Palette">;
+    DTX_HEADER Header;
+    if (Header.resourceVersion != TALON_JUPITER) COLOR Palette[256] <name="Color Palette">;
 } DTX <name="Monolith Productions LithTech .DTX Texture File">;
 
 //------------------------------------------------------------------------------------

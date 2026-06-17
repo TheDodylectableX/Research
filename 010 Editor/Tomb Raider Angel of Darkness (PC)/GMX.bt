@@ -12,27 +12,27 @@
 //---------------------------------------------------------------------------------------
 
 typedef struct {
-    float Version; // Why a float????
-    ushort FileCount <name="File Count">;
-    ushort Unknown;
-} Header <name="Header", read=Str("GMX Version %f | %u Files", this.Version, this.FileCount)>;
+    float Version; // Why a float???? Bruh
+    ushort fileCount <name="File Count">;
+    ushort Unknown   <format=hex>;
+} GMX_HEADER <read=Str("GMX Version %f | %u Files", this.Version, this.fileCount)>;
 
 typedef struct {
-    uint FileNameHash <name="File Name Hash", format=hex>;
-    uint FileOffset <name="File Offset",comment="Add 2048 bytes">;
-    uint FileSize <name="File Size">;
+    uint fileNameHash <name="File Name Hash", format=hex>;
+    uint fileOffset   <name="File Offset", comment="Add 2048 bytes">;
+    uint fileSize     <name="File Size">;
     
     local uint64 currentPosition <hidden=true> = FTell();
-    FSeek(FileOffset + 2048);
-    if (FileSize > 0) byte FileData[FileSize] <name="File Data">;
+    FSeek(fileOffset + 2048);
+    if (fileSize > 0) byte fileData[fileSize] <name="File Data">;
     FSeek(currentPosition);
-} File <name="File", read=Str("File Name Hash: 0x%X | File Offset: %u | File Size: %u bytes", this.FileNameHash, this.FileOffset + 2048, this.FileSize)>;
+} GMX_ENTRY <read=Str("File Name Hash: 0x%X | File Offset: %u | File Size: %u bytes", this.fileNameHash, this.fileOffset + 2048, this.fileSize)>;
 
 //---------------------------------------------------------------------------------------
 
 struct {
-    Header header;
-    if (header.FileCount > 0) File files[header.FileCount] <optimize=false>;
+    GMX_HEADER Header;
+    if (Header.fileCount > 0) GMX_ENTRY Entries[Header.fileCount] <optimize=false>;
 } GMX <name="Tomb Raider: Angel of Darkness (Remastered) .GMX Archive">;
 
 //---------------------------------------------------------------------------------------

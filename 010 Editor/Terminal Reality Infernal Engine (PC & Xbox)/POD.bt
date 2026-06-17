@@ -78,7 +78,7 @@ typedef struct { // We peek at the first 3 bytes without declaring the magic yet
         local uint stringTableOffset <hidden=true> = 0;      // Doesn't exist.
         local string Magic           <hidden=true> = "POD1"; // It doesn't exist, I just put it for aesthetic reasons lol.
     }
-} Header <name="Header", read=Str("%s Archive | %u Files | ''%s''", this.Magic, this.fileCount, this.archiveDescription)>;
+} POD_HEADER <read=Str("%s Archive | %u Files | ''%s''", this.Magic, this.fileCount, this.archiveDescription)>;
 
 typedef struct (uint Version, uint stringTableStart, uint entrySize) {
     local uint64 entryStart <hidden=true> = FTell();
@@ -113,15 +113,15 @@ typedef struct (uint Version, uint stringTableStart, uint entrySize) {
         byte fileData[fileSizeDisk] <name="File Data">; 
     }
     FSeek(nextEntryPosition);
-} FileEntry <read=Str("%s | File Size: %u bytes | File Offset: %u", this.fileName, this.fileSizeDisk, this.fileOffset), optimize=false>;
+} POD_ENTRY <read=Str("%s | File Size: %u bytes | File Offset: %u", this.fileName, this.fileSizeDisk, this.fileOffset), optimize=false>;
 
 //----------------------------------------------------------------------------
 
 struct {
-    Header header;
-    if (header.fileCount > 0) {
-        FSeek(header.fileTableOffset);
-        struct { FileEntry File(header.archiveVersion, header.stringTableOffset, header.entrySize)[header.fileCount]; } FileTable <name="File Table">;
+    POD_HEADER Header;
+    if (Header.fileCount > 0) {
+        FSeek(Header.fileTableOffset);
+        POD_ENTRY Files(Header.archiveVersion, Header.stringTableOffset, Header.entrySize)[Header.fileCount];
     }
 } POD <name="Terminal Reality Infernal Engine .POD Archive">;
 
