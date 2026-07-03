@@ -1,0 +1,133 @@
+//---------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: RPKG.bt
+//   Authors: Dodylectable, Glacier 2 Modding Community
+//   Version: 1.0
+//   Purpose: Reverse engineering IO Interactive's Glacier2 ResourcePackage format
+//  Category: Archives
+// File Mask: *.rpkg
+//  ID Bytes: 47 4B 50 52 | 32 4B 50 52
+//   History: 
+//---------------------------------------------------------------------------------
+
+// https://glaciermodding.org/docs/glacier2/formats/rpkg
+// There are two versions of the format, RPKG and RPK2.
+// Both use LZ4 compression and XOR encryption with a rotating key.
+
+//-----------------------------------------------------------------------
+// Switch game types to parse the archives properly!
+// "Hitman" - HITMAN: World of Assassination | "007FL" - 007 First Light
+//-----------------------------------------------------------------------
+const string Game <hidden=true> = "007FL";
+
+LittleEndian();
+
+typedef enum <ubyte> {
+    CHUNK_STANDARD = 0,
+    CHUNK_ADDON    = 1
+} CHUNK_TYPE;
+
+typedef enum <ubyte> {
+    REF_INSTALL  = 0x0,
+    REF_NORMAL   = 0x1,
+    REF_STREAMED = 0x2
+} REF_TYPE;
+
+//-------------------------------------------------------------------------
+
+// 8-bit packed bitfield configuration
+typedef struct {
+    ubyte    languageCode       : 5; // Bits 0-4
+    ubyte    isAcquiredResource : 1; // Bit 5
+    REF_TYPE referenceType      : 2; // Bits 6-7
+} ReferenceFlags <read=ReadReferenceFlags>;
+
+string ReadReferenceFlags(ReferenceFlags &f) {
+    string s;
+    string typeStr;
+    switch(f.referenceType) {
+        case REF_INSTALL:  typeStr = "Install";  break;
+        case REF_NORMAL:   typeStr = "Normal";   break;
+        case REF_STREAMED: typeStr = "Streamed"; break;
+        default:           typeStr = "Unknown";  break;
+    }
+    SPrintf(s, "[Language Code: %u | Is Acquired?: %u | Type: %s]", f.languageCode, f.isAcquiredResource, typeStr);
+    return s;
+}
+
+// Wrapper for data size to safely parse out engine compression and encryption flags
+typedef struct { uint rawSizeValue <name="Raw Size">; } ResourceDataSize <read=ReadResourceDataSize>;
+
+string ReadResourceDataSize(ResourceDataSize &r) {
+    string s;
+    uint actualSize  =  r.rawSizeValue & 0x3FFFFFFF;
+    int isScrambled  = (r.rawSizeValue & 0x80000000) != 0;
+    int isCompressed = (r.rawSizeValue & 0x40000000) != 0;
+
+    SPrintf(s, "%u bytes (%s%s%s)", actualSize, isCompressed ? "Compressed" : "Uncompressed", isScrambled  ? ", XOR Scrambled" : "", (!isCompressed && !isScrambled) ? ", Raw" : "");
+    return s;
+}
+
+typedef struct {
+    ReferenceFlags Flags;
+    uint64 referenceResourceID <name="Reference Resource ID", format=hex>;
+} ResourceReference;
+
+//-------------------------------------------------------------------------
+
+typedef struct {
+    char Magic[4] <comment="Reversed">;
+    if (Magic != "GKPR" && Magic != "2KPR") { Warning("Invalid file magic encountered: %s", Magic); }
+
+    if (Magic == "2KPR") {
+        uint Unknown         <format=hex>;
+        ubyte chunkID        <name="Chunk ID">;
+        CHUNK_TYPE chunkType <name="Chunk Type">;
+        ubyte chunkPatchID   <name="Chunk Patch ID">;
+        char languageCode[2] <name="Chunk Language Code">;
+    }
+
+    uint resourceCount         <name="Resource Count">;
+    uint hashHeaderTableSize   <name="Hash Header Table Size">;
+    uint resourceDataTableSize <name="Resource Data Table Size">;
+    if (chunkPatchID > 0) uint patchDeletionEntryCount <name="Patch Deletion Entry Count">;
+
+    // Array of deletion hashes if this archive is a patch container
+    if (chunkPatchID && patchDeletionEntryCount > 0) struct { uint64 deletionEntries[patchDeletionEntryCount] <format=hex>; } PatchDeletionEntries <name="Patch Deletion Entries">;
+} RPKG_HEADER;
+
+typedef struct {
+    uint64 runtimeResourceID      <name="Runtime Resource ID";
+    uint64 resourceDataOffset     <name="Resource Data Offset", comment="Absolute">;
+    ResourceDataSize resourceSize <name="Resource Size">;
+} ResourceDataEntry <read=Str("Resource ID: 0x%LX | Resource Data Offset: %Lu", this.runtimeResourceID, this.resourceDataOffset)>;
+
+typedef struct {
+    char resourceExtension[4]        <name="Resource Extension", comment="Reversed">;
+    uint resourceReferencesTableSize <name="Resource References Table Size">;
+    if (Game == "HITMAN") uint resourceStatesTableSize <name="Resource States Table Size", comment="Unused in HITMAN, Removed in 007 First Light.">;
+    uint resourceSizeUncompressed    <name="Resource Size Uncompressed">;
+    uint resourceSizeMemory          <name="Resource Size in Memory">;
+    uint resourceSizeVideoMemory     <name="Resource Size in Video Memory">;
+
+    if (resourceReferencesTableSize > 0) {
+        ushort resourceReferenceCount <name="Resource Reference Count">;
+        ushort resourceUnknown <format=hex>; // ushort is a workaround until I figure out the bitmasking they have going on here
+        if (resourceReferenceCount > 0) ResourceReference References[resourceReferenceCount];
+    }
+} ResourceMetadataEntry <read=Str("Resource Extension: %s%s%s%s | File Size (Uncompressed): %u bytes",
+                                  this.resourceExtension[3], this.resourceExtension[2], this.resourceExtension[1], this.resourceExtension[0], 
+                                  this.resourceSizeUncompressed)>;
+
+//-------------------------------------------------------------------------
+
+struct {
+    RPKG_HEADER Header;
+    if (Header.resourceCount > 0) {
+        struct { ResourceDataEntry     Entries[Header.resourceCount] <optimize=false>; } ResourceDataTable     <name="Resource Data Table">;     // sizeof(hashHeaderTableSize)
+        struct { ResourceMetadataEntry Entries[Header.resourceCount] <optimize=false>; } ResourceMetadataTable <name="Resource Metadata Table">; // sizeof(resourceDataTableSize)
+    }
+} RPKG <name="IO Interactive Glacier2 .RPKG ResourceArchive">;
+
+//-------------------------------------------------------------------------

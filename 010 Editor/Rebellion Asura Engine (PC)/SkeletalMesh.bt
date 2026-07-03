@@ -16,8 +16,7 @@ LittleEndian();
 
 const string Game <hidden=true> = "SE3"; // or SE4
 
-struct
-{
+struct {
     uint MeshCount;
     uint VertexCount;
     uint FaceCount;
@@ -25,8 +24,7 @@ struct
     uint UnknownCount;
 } Header <read=Str("Mesh Count: %d | Vertex Count: %d | Face Count: %d", this.MeshCount, this.VertexCount, this.FaceCount)>;
 
-struct
-{
+struct {
     uint SubmeshHash <format=hex>;
     uint UnknownValue_A;
     uint SubmeshFaceCount;
@@ -38,8 +36,7 @@ struct
 VEC3F MeshScale;
 VEC3F MeshOffset <comment="Must be multiplied by 2">;
 
-struct
-{
+struct {
     VEC3US Position;
     short Flag;
     VEC2HF UV0;
@@ -47,13 +44,8 @@ struct
     VEC4UB UnknownValues;
     VEC3US Tangents <comment="Maybe? I have no idea">;
     VEC2HF UV1;
-    if (Game == "SE3") {
-        VEC4UB Weights;
-        VEC4UB Indices;
-    } else {
-        ubyte Weights[8]; // SE4 & ZA4 have 8 weights
-        ubyte Indices[8]; // SE4 & ZA4 have 8 indices
-    }
+    if (Game == "SE3") { VEC4UB Weights, Indices; }
+    else               { ubyte Weights[8]; ubyte Indices[8]; } // SE4 & ZA4 have 8 weights
 } Vertices [Header.VertexCount] <optimize=false>;
 
 VEC3US Faces [Header.TriangleCount] <optimize=false>;

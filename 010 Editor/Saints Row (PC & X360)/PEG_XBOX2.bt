@@ -11,7 +11,7 @@
 //   History: 
 //----------------------------------------------------------------
 
-// Standard textures (diffuse / specular) will have .tga in their names, Normal maps will have .tgn instead. (SR1)
+// SR1: Standard textures (Diffuse / Specular) will have .tga in their names, Normal maps will have .tgn instead.
 
 BigEndian();
 local uint previousNextOffset  <hidden=true> = 0; // Running cumulative offset of the PREVIOUS entry (drives this entry's start).
@@ -27,29 +27,29 @@ typedef enum <ushort> {
 
 typedef struct {
     char   Magic[4];
-    ushort versionMajor      <name="Version (Major)">;
-    ushort versionMinor      <name="Version (Minor)">;
-    uint   imageDataOffset   <name="Image Data Offset", comment="Raw image data offset (Page-aligned to 0x1000 in practice)">;
-    uint   imageDataSize     <name="Image Data Size",   comment="Total file size minus the image starting offset (4096 bytes)">;
-    ushort imageCount        <name="Image Count">;
+    ushort versionMajor         <name="Version (Major)">;
+    ushort versionMinor         <name="Version (Minor)">;
+    uint   imageDataOffset      <name="Image Data Offset", comment="Raw image data offset (Page-aligned to 0x1000 in practice)">;
+    uint   imageDataSize        <name="Image Data Size",   comment="Total file size minus the image starting offset (4096 bytes)">;
+    ushort imageCount           <name="Image Count">;
     FSkip(2); // Reserved
-    ushort Unknown1          <name="Unknown 1", format=hex>;
-    ushort Unknown2          <name="Unknown 2", format=hex>;
-    uint   imageBaseOffset   <name="Image Starting Offset">;
+    ushort Unknown1             <name="Unknown 1", format=hex>;
+    ushort Unknown2             <name="Unknown 2", format=hex>;
+    uint   imageBaseOffset      <name="Image Starting Offset">;
 } PEG_HEADER <read=Str("%s Version %u.%u | %u Textures", this.Magic, this.versionMajor, this.versionMinor, this.imageCount)>;
 
 typedef struct {
-    ushort imageWidth        <name="Image Width">;
-    ushort imageHeight       <name="Image Height">;
-    IMAGE_FORMAT imageFormat <name="Image Format">;
+    ushort imageWidth           <name="Image Width">;
+    ushort imageHeight          <name="Image Height">;
+    IMAGE_FORMAT imageFormat    <name="Image Format">;
     FSkip(2); // Reserved
-    uint   Unknown1          <name="Unknown", format=hex>;
+    uint   Unknown1             <name="Unknown", format=hex>;
     FSkip(4); // Reserved
-    ushort imageFlags        <name="Image Flags", format=hex>;
-    byte   imageMipMapCount  <name="Image Mip Map Count", comment="1 = No Mips">;
-    char   imageName[45]     <name="Image Name", comment="Null-terminated, padded to fill record.">;
+    ushort imageFlags           <name="Image Flags", format=hex>;
+    byte   imageMipMapCount     <name="Image Mip Map Count", comment="1 = No Mips">;
+    char   imageName[45]        <name="Image Name", comment="Null-terminated, padded to fill record.">;
     FSkip(4); // Reserved
-    uint   nextDataOffset    <name="Next Data Offset", comment="Cumulative byte offset (Relative to image base) of the NEXT texture's data; 0 = Last (Runs to image data end)">;
+    uint   nextDataOffset       <name="Next Data Offset", comment="Cumulative byte offset (Relative to image base) of the NEXT texture's data; 0 = Last (Runs to image data end)">;
 
     //---- Resolve the texture data range
     local int64 texDataStart    <hidden=true> = Header.imageBaseOffset + previousNextOffset;
@@ -64,8 +64,8 @@ typedef struct {
     // Advance the running cumulative offset for the next entry.
     previousNextOffset = (nextDataOffset != 0 ? nextDataOffset : previousNextOffset);
 } PEG_TEXTURE <read=Str("%s | Image Dimensions: %ux%u | Image Format: %s | Image Mip Map Count: %u | Image Offset: %u (%u bytes)",
-                        this.imageName, this.imageWidth, this.imageHeight, EnumToString(this.imageFormat), this.imageMipMapCount,
-                        this.texDataStart, this.imageSize)>;
+                        this.imageName, this.imageWidth, this.imageHeight, EnumToString(this.imageFormat),
+                        this.imageMipMapCount, this.texDataStart, this.imageSize)>;
 
 //----------------------------------------------------------------
 

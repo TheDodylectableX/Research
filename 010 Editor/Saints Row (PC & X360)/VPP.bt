@@ -22,7 +22,7 @@ local uint  packageCompressed   <hidden=true> = 0;
 local uint  packageCondensed    <hidden=true> = 0;
 local uint  packageVersion      <hidden=true> = 0;
 
-uint64 AlignSector(uint64 value, uint64 alignment) { return (value + (alignment - 1)) & ~(alignment - 1); }
+uint64 AlignSector(uint64 Value, uint64 Alignment) { return (Value + (Alignment - 1)) & ~(Alignment - 1); }
 
 typedef enum <uint> {
     SAINTS_ROW       = 3,
@@ -33,10 +33,10 @@ typedef enum <uint> {
 } GAME_VERSION;
 
 typedef enum <uint> {
-    PACKED_UNCOMPRESSED         = 0, // Uncompressed per-file blocks.
-    PACKED_COMPRESSED           = 1, // ZLib compressed per-file blocks.
-    PACKED_CONDENSED            = 2, // Uncompressed condensed data stream. (SR2)
-    PACKED_COMPRESSED_CONDENSED = 3  // ZLib compressed condensed data stream. (SR1)
+    PACKED_UNCOMPRESSED           = 0, // Uncompressed per-file blocks.
+    PACKED_COMPRESSED             = 1, // ZLib compressed per-file blocks.
+    PACKED_CONDENSED_UNCOMPRESSED = 2, // SR2: Uncompressed condensed data stream.
+    PACKED_CONDENSED_COMPRESSED   = 3  // SR1: ZLib compressed condensed data stream.
 } PACKFILE_FLAGS;
 
 typedef struct { string assetName; } NameBlock <read=this.assetName>;
@@ -48,7 +48,7 @@ typedef struct {
     GAME_VERSION Version;
     if      (Version == SAINTS_ROW || Version == SAINTS_ROW_2) FSkip(324);
     else if (Version == SR_THE_THIRD) FSkip(336);
-    PACKFILE_FLAGS Flags <name="Flags", comment="bit0 = Compressed, bit1 = Condensed (solid)", format=hex>;
+    PACKFILE_FLAGS Flags <name="Flags", comment="Bit 0 = Compressed | Bit 1 = Condensed">;
     FSkip(4);   // Reserved
     uint fileCount <name="File Count">;
     uint fileSize  <name="File Size", comment="Total archive size in bytes">;
@@ -56,7 +56,7 @@ typedef struct {
     uint namesSize <name="File Names Size", comment="Total bytes of the name block">;
     if (Version == SAINTS_ROW_2) uint extensionsSize <name="File Extensions Size", comment="Total bytes of the extension block">;
     else uint Unknown1 <format=hex>;
-    uint archiveSizeUncompressed   <name="File Size (Uncompressed)">;
+    uint archiveSizeUncompressed <name="File Size (Uncompressed)">; // Compressed on SR1
     if      (Version == SAINTS_ROW_2) { int  archiveSizeCompressed <name="File Size (Compressed)", comment="-1 = Uncompressed">; uint Unknown2[3] <format=hex>; }
     else if (Version == SAINTS_ROW)   { uint Unknown2 <format=hex>, Unknown3 <format=hex>; }
 } Header <name="Header", read=Str("Packfile 0x%X Version %u | File Size: %u bytes", this.Magic, this.Version, this.fileSize)>;
@@ -64,17 +64,17 @@ typedef struct {
 //------------------------------------------------------
 
 typedef struct {
-    uint fileNameOffset      <name="File Name Offset",      comment="Relative, into the name block">;
-    uint fileExtensionOffset <name="File Extension Offset", comment="Relative, into the extension block (v4)">;
+    uint fileNameOffset        <name="File Name Offset",      comment="Relative into the name block">;
+    uint fileExtensionOffset   <name="File Extension Offset", comment="Relative into the extension block (v4)">;
     if (packageVersion == SAINTS_ROW) {
         uint fileRuntimeOffset <name="File Runtime Offset", comment="Offset into the DECOMPRESSED data (Mode C) or uncompressed runtime offset (Mode B)">;
         uint fileNameHash      <name="File Name Hash", format=hex>;
     } else { FSkip(4); uint fileDataOffset <name="File Offset", comment="Relative to the data base">; }
-    uint fileSizeUncompressed <name="File Size (Uncompressed)">;
-    int  fileSizeCompressed   <name="File Size (Compressed)", comment="ZLib | -1 = Uncompressed">;
+    uint fileSizeUncompressed  <name="File Size (Uncompressed)">;
+    int  fileSizeCompressed    <name="File Size (Compressed)", comment="ZLib | -1 = Uncompressed">;
     FSkip(4); // Reserved
 
-    //--- Pull this entry's filename for the string
+    //--- Pull the entry's filename for the string
     local string fileName         <hidden=true>;
     local uint64 fileNamePosition <hidden=true> = FTell();
     FSeek(fileNameBlockOffset + fileNameOffset);
@@ -85,22 +85,19 @@ typedef struct {
     local int64 dataTargetOffset <hidden=true> = 0;
     local uint  dataActualSize   <hidden=true> = 0;
 
-    if (packageCompressed == 1 && packageCondensed == 1) {
-        // Mode C: All file data is one solid ZLib stream; Nothing to map inline.
+    if (packageCompressed == 1 && packageCondensed == 1) { // Mode C: All file data is one solid ZLib stream; Nothing to map inline.
         dataTargetOffset   = 0;
         dataActualSize     = 0;
-    } else if (packageCompressed == 1) {
-        // Mode B: Contiguous, Sector-aligned ZLib blocks. Follow the cursor.
+    } else if (packageCompressed == 1) { // Mode B: Contiguous, Sector-aligned ZLib blocks. Follow the cursor.
         dataTargetOffset   = dataRunningOffset;
         dataActualSize     = fileSizeCompressed;
         dataRunningOffset += AlignSector(fileSizeCompressed, 2048);
-    } else {
-        // Mode A: Uncompressed, stored relative offset is real.
+    } else { // Mode A: Uncompressed, Stored relative offset is real.
         dataTargetOffset   = dataBaseOffset + fileDataOffset;
         dataActualSize     = (fileSizeCompressed == -1) ? fileSizeUncompressed : fileSizeCompressed;
     }
 
-    // --- Embed the file's bytes inline (store / seek / read / restore)
+    //--- Embed the file's bytes inline (Store / Seek / Read / Restore)
     if (dataActualSize > 0 && dataTargetOffset > 0 && dataTargetOffset < FileSize()) {
         local uint64 currentPosition <hidden=true> = FTell();
         FSeek(dataTargetOffset);

@@ -1,0 +1,108 @@
+//---------------------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: BMD6Model.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Wolfenstein The New Order / Old Blood's skeletal mesh format
+//  Category: Models
+// File Mask: *.bmd6model
+//  ID Bytes: 28 36 4D 4D
+//   History: 
+//---------------------------------------------------------------------------------------------
+
+#include "../Common.bt"
+
+typedef struct {
+    VEC3F Positions;
+    VEC2F UV;
+    VEC4UB Normals  <comment="W component stores the weights packed">;
+    VEC4UB Tangents <comment="W component stores the highest weight value (hiWeight)">;
+    VEC4UB BoneIndices;
+} MD6_VERTEX;
+
+typedef struct {
+    LittleEndian();
+    String morphTargetName <name="Morph Target Name", comment="Also encodes pose weights">;
+    BigEndian();
+    byte deltaXYZ[parentof(this).vertexCount * 3] <name="XYZ Deltas (bias-128)", comment="3 signed bytes per vertex. Delta = byte - 128. 0x80 = No movement.">;
+    float footer <name="Block Footer", comment="Always 1.0 (0x3F800000 BE). Acts as a block-end sentinel.">;
+} MD6_MORPH <read=Str("%s", this.morphTargetName.ActualString)>;
+
+typedef struct {
+    LittleEndian();
+    String materialPath    <name="Material Path">;
+    BigEndian();
+    uint materialHash      <name="Material Hash", format=hex>;
+    uint materialMeshIndex <name="Material Mesh Index">;
+    uint vertexStart       <name="Vertex Start">;
+    uint vertexEnd         <name="Vertex End">;
+} MD6_MATERIAL <read=Str("%s | Vertex Start: %u | Vertex End: %u", this.materialPath.ActualString, this.vertexStart, this.vertexEnd)>;
+
+//---------------------------------------------------------------------------------------------
+
+typedef struct {
+    LittleEndian();
+    char Magic[4];
+    time_t Timestamp              <name="Model Timestamp">; // Could be model hash
+    time_t skeletonTimestamp      <name="Skeleton Timestamp">; // Could be skeleton hash
+    String skeletonPath           <name="Skeleton Path">;
+    BigEndian();
+    VEC3F expansionBoundingBoxMin <name="Expansion Bounding Box Minimum">;
+    VEC3F expansionBoundingBoxMax <name="Expansion Bounding Box Maximum">;
+    byte boneRemapFlag            <name="Bone Remapping Table Flag", comment="remapForSkinning">;
+    LittleEndian();
+    uint Unknown                  <comment="morphSkinName?">;
+    BigEndian();
+    ubyte boneRemapTable[128]     <name="Bone Remapping Table", comment="Bone remap table rounded up to next multiple of 8, Needs bone count from the MD6SKL">; // Most models will have it as 128 anyway
+    VEC3F defaultBoundingBoxMin   <name="Default Bounding Box Minimum">;
+    VEC3F defaultBoundingBoxMax   <name="Default Bounding Box Maximum">;
+    uint meshCount                <name="Mesh Count">;
+} MD6_HEADER <read=Str("Skeleton Path: %s | %u Meshes", this.skeletonPath.ActualString, this.meshCount)>;
+
+typedef struct {
+    LittleEndian();
+    String meshName     <name="Mesh Name">;
+    String materialPath <name="Material Path">;
+    BigEndian();
+    byte subMeshFlag <name="Submesh Flag", comment="allowSkinRemapping">;
+    uint UVCount     <name="UV Set Count">;
+    uint vertexCount <name="Vertex Count">;
+    uint faceCount   <name="Face Count">;
+    VEC3F meshBoundingBox_Minimum <name="Total Mesh Bounding Box Minimum", comment="The minimum bounding box values of the mesh">;
+    VEC3F meshBoundingBox_Maximum <name="Total Mesh Bounding Box Maximum", comment="The maximum bounding box values of the mesh">;
+    
+    if (vertexCount > 0) MD6_VERTEX Vertices[vertexCount] <name="Vertex Data", optimize=false>;
+    if (faceCount > 0)   VEC3US Faces[faceCount] <optimize=false>;
+
+    uint boneIndexOffset <name="Bone Index Offset", comment="If not 0 then add this value on top of the mesh's bone indices to get the actual bone index">;
+    
+    uint morphUnknown1  <name="Morph Target Unknown 1", comment="Per-mesh value; May encode bone count or LOD flags.">;
+    uint morphDataFlag  <name="Morph Data Flag", comment="0 = No UV Atlas Data (Use Morph Targets). | >0 = UV Atlas Data follows.">;
+    ubyte morphUnknown2 <name="Morph Target Unknown 2">;
+
+    if (morphDataFlag == 0) { // No morph UV atlas.
+        uint morphTargetCount <name="Morph Target Count", comment="Number of inline morph target delta blocks that follow.">;
+        if (morphTargetCount > 0) MD6_MORPH morphTargets[morphTargetCount] <name="Morph Targets", optimize=false>;
+    } else {
+        // Morph UV atlas path: VEC2F UV coordinate into the morph delta texture atlas.
+        // Used only when MorphDataFlag > 0. The actual position deltas live in a companion .bimage.
+        if (vertexCount > 0) VEC2F morphUVs[vertexCount] <name="Morph Atlas UVs", optimize=false>;
+        // 5-byte footer after UV data (Always Zero).
+        ubyte morphUVFooterFlag <name="Morph UV Footer Flag", comment="Always 0">;
+        uint morphUVFooterPad <name="Morph UV Footer Pad", comment="Always 0">;
+    }
+} MD6_MESH <read=Str("%s | %u Vertices | %u Faces", this.meshName.ActualString, this.vertexCount, this.faceCount)>;
+
+//---------------------------------------------------------------------------------------------
+
+struct {
+    MD6_HEADER Header;
+    if (Header.meshCount > 0) MD6_MESH Mesh[Header.meshCount] <name="Mesh", optimize=false>;
+    FSkip(4); // Padding alignment for materials block
+    uint materialCount <name="Material Count">;
+    if (materialCount > 0) MD6_MATERIAL Material[materialCount] <name="Material", optimize=false>;
+    char footerMagic[4] <name="Footer Magic">;
+} BMD6MODEL <name="id Software id Tech 5 .BMD6Model Skeletal Mesh">;
+
+//---------------------------------------------------------------------------------------------

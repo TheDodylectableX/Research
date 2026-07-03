@@ -69,8 +69,8 @@ typedef struct { // We peek at the first 3 bytes without declaring the magic yet
         }
     }
     else { // Legacy Format (Fury3, Monster Truck Madness, Terminal Velocity)
-        uint fileCount              <name="File Count">;
-        char archiveDescription[80] <name="Archive Description">;
+        uint fileCount               <name="File Count">;
+        char archiveDescription[80]  <name="Archive Description">;
 
         local uint archiveVersion    <hidden=true> = 1;
         local uint entrySize         <hidden=true> = 40;

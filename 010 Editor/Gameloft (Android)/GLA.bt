@@ -1,0 +1,46 @@
+//---------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: GLA.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Gameloft's archive format
+//  Category: Archives
+// File Mask: *.GLA
+//  ID Bytes: 
+//   History: 
+//---------------------------------------------------------
+
+BigEndian();
+
+typedef struct {
+    uint Unknown            <format=hex>;
+    uint dataStartingOffset <name="Data Starting Offset", comment="Absolute">;
+    uint stringTableOffset  <name="String Table Offset",  comment="Absolute">;
+    uint fileCount          <name="File Count">;
+} GLA_HEADER;
+
+typedef struct {
+    uint fileOffset         <name="File Offset",          comment="Absolute, First entry matches with dataStartingOffset">;
+    uint fileSize           <name="File Size",            comment="Uncompressed">;
+    uint fileNameOffset     <name="File Name Offset",     comment="Relative">;
+    FSkip(4); // Reserved
+
+    local int64 currentPosition <hidden=true> = FTell();
+    FSeek(fileNameOffset + Header.stringTableOffset);
+    string fileName <name="File Name">;
+    if (fileSize > 0) {
+        FSeek(fileOffset);
+        byte fileData[fileSize] <name="File Data">;
+    }
+    FSeek(currentPosition);
+} GLA_FILE <read=Str("%s | File Offset: %u | File Size: %u", this.fileName, this.fileOffset, this.fileSize)>;
+
+//---------------------------------------------------------
+
+struct {
+    GLA_HEADER Header;
+    if (Header.fileCount > 0) GLA_FILE Files[Header.fileCount] <optimize=false>;
+} GLA <name="Gameloft .GLA Archive">;
+
+//---------------------------------------------------------
