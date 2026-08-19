@@ -13,38 +13,44 @@
 
 #include "../Common.bt"
 
+typedef enum <ubyte> {
+    INDEX     = 2,
+    RESOURCES = 3
+} INDEX_TYPE;
+
 typedef struct {
     char Language[16]     <name="Platform Stream Data Language">;
     uint streamDataOffset <name="Platform Stream Data Offset">;
     uint streamDataSize   <name="Platform Stream Data Size">;
-} idPlatformStreamData;
+} RESOURCES_PLATFORMSTREAMDATA;
 
 //------------------------------------------------------------------------------------------
 
 typedef struct {
     BigEndian();
-    ubyte INDEXType <name="INDEX Type", comment="2 = Index / 3 = Resources">;
-    char Magic[3]   <name="Magic", comment="Always SER">;
-    uint INDEXSize  <name="INDEX Size", comment="Size of this file minus 32 bytes">;
+    INDEX_TYPE INDEXType  <name="INDEX Type", comment="2: Index | 3: Resources">;
+    char       Magic[3]   <comment="Always SER">;
+    uint       INDEXSize  <name="INDEX Size", comment="Size of this file minus 32 bytes">;
     FSkip(24); // Reserved
-} INDEX_HEADER;
+} INDEX_HEADER <read=Str("INDEX Type: %d | INDEX Magic: %s | INDEX Size: %u bytes", this.INDEXType, this.Magic, this.INDEXSize + 32)>;
 
 typedef struct {
     BigEndian();
-    int resourceIndex <name="Resource Index">;
+    uint   resourceIndex              <name="Resource Index">;
     LittleEndian();
-    String resourceType <name="Resource Type">;
-    String resourceFileNameUncooked <name="Resource Name (Uncooked)", comment="Referenced in DECL files">;
-    String resourceFileNameCooked <name="Resource Name (Cooked)", comment="This is in the actual archive">;
+    String resourceType               <name="Resource Type">;
+    String resourceFileNameUncooked   <name="Resource Name (Uncooked)", comment="Referenced in DECL files">;
+    String resourceFileNameCooked     <name="Resource Name (Cooked)",   comment="This is in the actual archive">;
     BigEndian();
-    uint resourceOffset <name="Resource Offset">;
-    uint resourceSizeUncompressed <name="Resource Size (Uncompresed)">;
-    uint resourceSizeCompressed <name="Resource Size (Compressed)", comment="ZLib">;
-    uint idPlatformStreamDataCount <name="Platform Stream Data Count">;
-    if (idPlatformStreamDataCount > 0) idPlatformStreamData platformStreamData[idPlatformStreamDataCount] <name="Platform Stream Data", optimize=false>;
-    uint useBits <name="Use Bits?">;
-    ubyte resourceUnknown <name="Resource Unknown">;
-} RESOURCES_ENTRY;
+    uint   resourceOffset             <name="Resource Offset">;
+    uint   resourceSizeUncompressed   <name="Resource Size (Uncompresed)">;
+    uint   resourceSizeCompressed     <name="Resource Size (Compressed)", comment="ZLib">;
+    uint   idPlatformStreamDataCount  <name="Platform Stream Data Count">;
+    if    (idPlatformStreamDataCount > 0) RESOURCES_PLATFORMSTREAMDATA platformStreamData[idPlatformStreamDataCount] <name="Platform Stream Data", optimize=false>;
+    uint   resourceUseBits            <name="Use Bits?">;
+    ubyte  resourceUnknown            <name="Resource Unknown", format=hex>;
+} RESOURCES_ENTRY <name="File Entry", read=Str("ID: %u | %s | %s | File Offset: %u | File Size (Uncompressed): %u bytes",
+                                               this.resourceIndex, this.resourceType.ActualString, this.resourceFileNameCooked.ActualString, this.resourceOffset, this.resourceSizeUncompressed)>;
 
 //------------------------------------------------------------------------------------------
 

@@ -1,0 +1,117 @@
+//---------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: MD2.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering id Software's id Tech 2 models (Quake 2 variant)
+//  Category: Models
+// File Mask: *.md2
+//  ID Bytes: 49 44 50 32
+//   History: 
+//---------------------------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+local int i <hidden=true>;
+
+//---------------------------------------------------------------------------------
+
+typedef struct {
+    char Magic[4];
+    uint Version;
+    uint skinWidth        <name="Skin Width">;
+    uint skinHeight       <name="Skin Height">;
+    uint frameSize        <name="Frame Size">;
+    uint skinCount        <name="Skin Count">;
+    uint vertexCount      <name="Vertex Count">;
+    uint UVCount          <name="UV Count">;
+    uint faceCount        <name="Face Count">;
+    uint GLCommandCount   <name="GL Commands DWORD Count", comment="Number of DWORDs, Not sequence count.">;
+    uint keyframeCount    <name="Keyframe Count">;
+
+    uint offsetSkins      <name="Skin Data Offset">;
+    uint offsetUVs        <name="UV Data Offset">;
+    uint offsetFaces      <name="Face Data Offset">;
+    uint offsetFrames     <name="Keyframe Data Offset">;
+    uint offsetGLCommands <name="GL Commands Data Offset">;
+    uint offsetEnd        <name="File End Offset", comment="Total file size basically">;
+} MD2_HEADER <read=Str("%s Version %u | %u Skins - Dimensions: %ux%u | %u Vertices | %u Faces",
+                       this.Magic, this.Version, this.skinCount, this.skinWidth, this.skinHeight, this.vertexCount, this.faceCount)>;
+
+typedef struct { char Name[64]; } MD2_SKIN <read=Name>;
+
+typedef struct { VEC2SS ST; } MD2_UV;
+
+typedef struct {
+    VEC3US vertexIndices <name="Vertex Indices">;
+    VEC3US UVIndices     <name="UV Indices">;
+} MD2_FACE;
+
+typedef struct {
+    VEC3UB Positions;
+    ubyte lightNormalIndex;
+} MD2_VERTEX <read=Str("Positions: (%d, %d, %d) | Light Normal Index: %d", this.Positions.X, this.Positions.Y, this.Positions.Z, this.lightNormalIndex)>;
+
+typedef struct (int vertexCount) {
+    VEC3F frameScale     <name="Frame Scale">;
+    VEC3F frameTranslate <name="Frame Translate">;
+    char  frameName[16]  <name="Frame Name">;
+    MD2_VERTEX Vertices[vertexCount] <optimize=false>;
+} MD2_FRAME <read=frameName>;
+
+typedef struct {
+    VEC2F ST;
+    int vertexIndex <name="Vertex Index">;
+} GL_VERTEX;
+
+typedef struct (int cmd) {
+    local int vertexCount <hidden=true> = cmd < 0 ? -cmd : cmd;
+    local string faceType <hidden=true> = cmd < 0 ? "FAN" : "STRIP";
+
+    int Command <comment="Positive = Strip | Negative = Fan">;
+    GL_VERTEX Vertices[vertexCount] <optimize=false>;
+} GL_COMMAND_SEQUENCE <read=Str("Face Type: %s | Vertex Count: %d", this.faceType, this.vertexCount)>;
+
+//---------------------------------------------------------------------------------
+
+struct {
+    MD2_HEADER Header <name="Header", bgcolor=cLtBlue>;
+
+    if (Header.skinCount > 0 && Header.offsetSkins > 0) {
+        FSeek(Header.offsetSkins);
+        MD2_SKIN Skins[Header.skinCount] <optimize=false, bgcolor=cLtGreen>;
+    }
+
+    if (Header.UVCount > 0 && Header.offsetUVs > 0) {
+        FSeek(Header.offsetUVs);
+        MD2_UV UVs[Header.UVCount] <name="UV Coordinates", optimize=false, bgcolor=cLtPurple>;
+    }
+
+    if (Header.faceCount > 0 && Header.offsetFaces > 0) {
+        FSeek(Header.offsetFaces);
+        MD2_FACE Faces[Header.faceCount] < optimize=false, bgcolor=cLtRed>;
+    }
+
+    if (Header.keyframeCount > 0 && Header.offsetFrames > 0) {
+        FSeek(Header.offsetFrames);
+        MD2_FRAME Frames(Header.vertexCount)[Header.keyframeCount] < optimize=false, bgcolor=cLtYellow>;
+    }
+    
+    if (Header.GLCommandCount > 0 && Header.offsetGLCommands > 0) {
+        FSeek(Header.offsetGLCommands);
+        struct {
+            local int currentCommand <hidden=true>;
+            while (true) {
+                currentCommand = ReadInt(FTell());
+                if (currentCommand == 0) {
+                    int EndToken <name="End Token", comment="0 = End of GL Commands">;
+                    break;
+                }
+                GL_COMMAND_SEQUENCE Sequence(currentCommand);
+            }
+        } GLCommands <name="GL Commands", bgcolor=cLtAqua>;
+    }
+} MD2 <name="id Software id Tech 2 .MD2 Model">;
+
+//---------------------------------------------------------------------------------

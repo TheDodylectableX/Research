@@ -21,17 +21,17 @@ LittleEndian();
 #include "../Common.bt"
 
 typedef struct {
-    char Magic[4];
-    ubyte headerSize         <name="Header Size">;
+    char   Magic[4];
+    ubyte  headerSize        <name="Header Size">;
     ushort unusedVertexCount <name="Unused Vertex Count", comment="Game doesn't seem to use this">;
     FSkip(1); // Padding
-    uint TMTHash             <name="TMT Hash", format=hex>;
-    uint linkedSubmeshHash   <name="Linked Submesh Hash", comment="This corresponds to a submesh inside the companion .CHR file", format=hex>;
-    uint morphTargetCount    <name="Morph Target Count">;
-    uint vertexCount         <name="Vertex Count", comment="Per morph target">;
-    uint Unknown             <comment="Always 0x18000000">;
+    uint   TMTHash           <name="TMT Hash", format=hex>;
+    uint   linkedSubmeshHash <name="Linked Submesh Hash", comment="This corresponds to a submesh inside the companion .CHR file", format=hex>;
+    uint   morphTargetCount  <name="Morph Target Count">;
+    uint   vertexCount       <name="Vertex Count", comment="Per morph target">;
+    uint   Unknown           <comment="Always 0x18000000", format=hex>;
     FSkip(4); // Padding
-} Header <name="Header", read=Str("Hash: 0x%X | Linked Submesh: 0x%X | %u Morph Targets | %u Vertices", this.TMTHash, this.linkedSubmeshHash, this.morphTargetCount, this.vertexCount)>;
+} TMT_HEADER <read=Str("Hash: 0x%X | Linked Submesh: 0x%X | %u Morph Targets | %u Vertices", this.TMTHash, this.linkedSubmeshHash, this.morphTargetCount, this.vertexCount)>;
 
 typedef struct {
     VEC3F Positions;
@@ -46,9 +46,9 @@ typedef struct (int totalMorphTargetCount) {
 //---------------------------------------------------------------------
 
 struct {
-    Header header <bgcolor=cLtPurple>;
-    local int totalMorphTargetCount <hidden=true> = header.morphTargetCount + 1;
-    VertexBlock Vertices(totalMorphTargetCount)[header.vertexCount] <bgcolor=cLtBlue, optimize=false>;
+    TMT_HEADER  Header;
+    local uint  totalMorphTargetCount <hidden=true> = Header.morphTargetCount + 1;
+    VertexBlock Vertices(totalMorphTargetCount)[Header.vertexCount] <optimize=false>;
 } TMT <name="Tomb Raider: Angel of Darkness (Remastered) .TMT Morph Target">;
 
 //---------------------------------------------------------------------

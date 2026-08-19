@@ -1,0 +1,96 @@
+//---------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: AFS.bt
+//   Authors: Dodylectable, Luigi Auriemma (Initial Research)
+//   Version: 1.0
+//   Purpose: Reverse engineering the AFS archive format in many games
+//  Category: Archives
+// File Mask: *.afs
+//  ID Bytes: 41 46 53 00
+//   History: 
+//---------------------------------------------------------------------
+
+// Some AFS archives don't have a file table
+local int i <hidden=true>;
+
+//---------------------------------------------------------------------
+
+typedef struct {
+    char Magic[4];
+    uint fileCount <name="File Count">;
+} AFS_HEADER <read=Str("%s Archive | %u Files", this.Magic, this.fileCount)>;
+
+typedef struct {
+    uint fileOffset <name="File Offset">;
+    uint fileSize   <name="File Size">;
+} AFS_ENTRY <read=Str("File Offset: %u | File Size: %u bytes", this.fileOffset, this.fileSize)>;
+
+typedef struct {
+    char fileName[32]     <name="File Name">;
+    byte fileMetadata[16] <name="File Metadata">;
+} AFS_NAME <name="File Name", read=Str("%s", this.fileName)>;
+
+typedef struct (int index) {
+    local uint fileIndex  <name="File Index">  = index;
+    local uint dataOffset <name="File Offset"> = AFS.Entries[fileIndex].fileOffset;
+    local uint dataSize   <name="File Size">   = AFS.Entries[fileIndex].fileSize;
+
+    // Map out the actual file payload data block first at its natural position
+    if (dataSize > 0 && dataOffset < FileSize()) byte fileData[dataSize] <name="File Data">;
+
+    // Jump to get the file name metadata then jump back
+    if (AFS.resolvedFileNameTableOffset > 0 && AFS.resolvedFileNameTableOffset < FileSize()) {
+        local uint64 nameAddress <name="File Name Address"> = AFS.resolvedFileNameTableOffset + (fileIndex * 48);
+        FSeek(nameAddress);
+        char fileName[32]     <name="File Name">;
+        byte fileMetadata[16] <name="File Metadata">;
+    }
+
+    // Snap the file pointer to the end of the payload data to guarantee a valid structure size
+    FSeek(dataOffset + dataSize);
+} FileView <name="File Entry", read=GetFileViewSummary>;
+
+string GetFileViewSummary(FileView &view) {
+    if (AFS.resolvedFileNameTableOffset > 0 && AFS.resolvedFileNameTableOffset < FileSize()) { return Str("%s | Size: %u bytes", view.fileName, view.dataSize); }
+    return Str("File #%04d | Size: %u bytes", view.fileIndex, view.dataSize);
+}
+
+//---------------------------------------------------------------------
+
+struct {
+    AFS_HEADER Header;
+    if (Header.fileCount > 0) AFS_ENTRY Entries[Header.fileCount] <optimize=false>;
+
+    uint fileNameTableOffset <name="File Name Table Offset">;
+    uint fileNameTableSize   <name="File Name Table Size">;
+
+    // Resolve name table if primary descriptors are missing/null, Found this on House of The Dead 3
+    local uint64 resolvedFileNameTableOffset <hidden=true, name="Resolved File Name Table Offset"> = fileNameTableOffset;
+    local uint resolvedFileNameTableSize     <hidden=true, name="Resolved File Name Table Size">   = fileNameTableSize;
+    if ((resolvedFileNameTableOffset == 0 || resolvedFileNameTableOffset >= FileSize()) && Header.fileCount > 0) {
+        if (Entries[0].fileOffset >= 8) {
+            resolvedFileNameTableOffset = ReadUInt(Entries[0].fileOffset - 8);
+            resolvedFileNameTableSize   = ReadUInt(Entries[0].fileOffset - 4);
+        }
+    }
+
+    if (resolvedFileNameTableSize > 0 && resolvedFileNameTableOffset > 0 && resolvedFileNameTableOffset < FileSize()) {
+        FSeek(resolvedFileNameTableOffset);
+        AFS_NAME Names[Header.fileCount] <hidden=true, optimize=false>;
+    }
+
+    //-------------------------------------------------------------------------------------------------------------------
+
+    if (AFS.Header.fileCount > 0) {
+        struct {
+            for (i = 0; i < AFS.Header.fileCount; i++) { // Seek to the target file data position before creating the struct instance
+                FSeek(AFS.Entries[i].fileOffset);
+                FileView file(i);
+            }
+            FSeek(FileSize()); // Force the parent container's end boundary safely to the end of the file
+        } VirtualFileSystem <name="Asset Payload">;
+    }
+} AFS;
+
+//---------------------------------------------------------------------

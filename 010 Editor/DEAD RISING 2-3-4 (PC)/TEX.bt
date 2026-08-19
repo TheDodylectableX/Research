@@ -6,8 +6,8 @@
 //   Version: 1.0
 //   Purpose: Reverse engineering Dead Rising 2/3/4's textures
 //  Category: Images / Textures
-// File Mask: *.tex | *.hrt
-//  ID Bytes: 06 05 04 03
+// File Mask: *.tex | *.hrt | *.big
+//  ID Bytes: 06 05 04 03 | 03 04 05 06
 //   History: 
 //-------------------------------------------------------------
 
@@ -26,29 +26,36 @@ typedef enum <ubyte> {
 } IMAGE_FORMAT;
 
 typedef enum <uint> {
-    TEXTURE_HIGH_RESOLUTION = 4, // Found on DR3
-    TEXTURE = 16
+    TEXTURE_HIGH_RESOLUTION = 4, // Found it on DR3
+    TEXTURE = 16,
+    ASSET_ARCHIVE = 2048
 } ASSET_TYPE;
+
+typedef enum <uint> {
+    UNCOMPRESSED    = 0,
+    COMPRESSED      = 1, // Saw it on PC, DR2 Specifically
+    COMPRESSED_X360 = 2, // Saw it on the X360 DLCs
+} COMPRESSION_TYPE;
 
 //---------------------------------------------------------
 
 typedef struct {
-    uint Magic <format=hex>;
-    uint dataStartOffset <name="Data Start Offset", comment="Absolute">;
-    uint fileSize  <name="File Size">;
-    uint fileCount <name="File Count">;
+    uint Magic             <format=hex>;
+    uint dataStartOffset   <name="Data Start Offset", comment="Absolute (base-relative inside a nested .big)">;
+    uint fileSize          <name="File Size">;
+    uint fileCount         <name="File Count">;
     uint Version;
-    uint stringTableOffset <name="String Table Offset", comment="Absolute">;
+    uint stringTableOffset <name="String Table Offset", comment="Absolute (base-relative inside a nested .big)">;
 } Header <name="Header", read=Str("Archive Version %u | File Size: %u bytes | %u Assets", this.Version, this.fileSize, this.fileCount)>;
 
 typedef struct {
-    uint fileNameOffset <name="File Name Offset",  comment="Absolute">;
-    uint fileHash       <name="File Hash", comment="Most likely", format=hex>;
+    uint fileNameOffset       <name="File Name Offset",  comment="Absolute">;
+    uint fileHash             <name="File Hash", comment="Most likely", format=hex>;
     uint fileSizeCompressed   <name="File Size (Compressed)">;
     uint fileSizeUncompressed <name="File Size (Uncompressed)">;
-    uint fileOffset       <name="File Offset", comment="Absolute">;
-    ASSET_TYPE fileType   <name="File Type", format=hex>;
-    uint isCompressedFlag <name="Is Compressed?", format=hex>;
+    uint fileOffset           <name="File Offset", comment="Absolute">;
+    ASSET_TYPE fileType       <name="File Type", format=hex>;
+    COMPRESSION_TYPE isCompressedFlag <name="Is Compressed?">;
 } FileEntry <name="File Entry">;
 
 typedef struct { string fileName <name="File Name">; } AssetName <name="Asset File Name", read=fileName>;

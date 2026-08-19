@@ -1,18 +1,20 @@
-//---------------------------------------------------------------------
+//-----------------------------------------------------------------------
 //--- 010 Editor Binary Template
 //
 //      File: CHR.bt
 //   Authors: Dodylectable, Violet
 //   Version: 1.0
-//   Purpose: Reverse engineering TR: Angel of Darkness' 3D models
+//   Purpose: Reverse engineering TR: Angel of Darkness' skeletal models
 //  Category: Models
 // File Mask: *.CHR
 //  ID Bytes: 00 00 00 00
 //   History: 
-//---------------------------------------------------------------------
+//-----------------------------------------------------------------------
 
 LittleEndian();
 #include "../Common.bt"
+
+//-----------------------------------------------------------------------
 
 typedef struct {
     VEC4F Origin;
@@ -21,15 +23,15 @@ typedef struct {
 } COLLIDE_SPHERE;
 
 typedef enum <ushort> { // Padded byte entry
-  DRAWPT_POINTLIST     = 0x1,
-  DRAWPT_LINELIST      = 0x2,
-  DRAWPT_LINESTRIP     = 0x3,
-  DRAWPT_TRIANGLELIST  = 0x4,
-  DRAWPT_TRIANGLESTRIP = 0x5,
-  DRAWPT_TRIANGLEFAN   = 0x6,
+    DRAWPT_POINTLIST     = 0x1,
+    DRAWPT_LINELIST      = 0x2,
+    DRAWPT_LINESTRIP     = 0x3,
+    DRAWPT_TRIANGLELIST  = 0x4,
+    DRAWPT_TRIANGLESTRIP = 0x5,
+    DRAWPT_TRIANGLEFAN   = 0x6,
 } DRAW_PRIMITIVETYPE;
 
-//---------------------------------------------------------------------
+//-----------------------------------------------------------------------
 
 typedef struct {
     uint Magic;
@@ -52,13 +54,13 @@ typedef struct (uint boneCount) {
         VEC4F preTransform[4]  <name="Bone Pre-Transform Pose">;
         VEC4F postTransform[4] <name="Bone Post-Transform Pose">;
         COLLIDE_SPHERE Sphere  <name="Collide Sphere">;
-        int   physicsFlags     <name="Physics Flags">;
+        int   physicsFlags     <name="Physics Flags", format=hex>;
         uint  parentBone       <name="Bone Parent">;
         FSkip(72); // Reserved
     } Bone[boneCount] <read=boneName, optimize=false>;
 } SkeletonData;
 
-//---------------------------------------------------------------------
+//-----------------------------------------------------------------------
 
 typedef struct {
     VEC3SS primaryPositions   <name="Primary Positions">;
@@ -83,7 +85,7 @@ typedef struct {
 } SYS_D3D_SKIN_VECTOR_RIGGED;
 
 typedef struct {
-    uint faceCount <name="Face Count">;
+    uint   faceCount <name="Face Count">;
     ushort Indices[faceCount];
 } IndicesData;
 
@@ -100,7 +102,7 @@ typedef struct {
 } RunData;
 
 typedef struct {
-    int Unknown      <format=hex>;
+    int  Unknown     <format=hex>;
     uint skinID      <name="Skin ID">;
     uint vertexCount <name="Vertex Count">;
     SYS_D3D_SKIN_VECTOR_WEIGHTED Vertices[vertexCount];
@@ -114,7 +116,7 @@ typedef struct {
     int meshID             <name="Mesh Hash",  format=hex>;
     int indexBone          <name="Mesh Index Bone">;
     int indexAnimationBone <name="Mesh Index Animation Bone">;
-    int vertexCount        <name="Vertex Count">;
+    uint vertexCount       <name="Vertex Count">;
     SYS_D3D_SKIN_VECTOR_RIGGED Vertices[vertexCount] <optimize=false>;
     IndicesData Faces;
     RunData runData;
@@ -130,7 +132,7 @@ typedef struct {
     RiggedData riggedData[numChildren] <optimize=false>;
 } CHR_MESH_2;
 
-//---------------------------------------------------------------------
+//-----------------------------------------------------------------------
 
 struct CHR_TEXTURE_DATA{
     uint materialCount   <name="Material Count">;
@@ -142,18 +144,18 @@ struct CHR_TEXTURE_DATA{
 
     uint textureCount <name="Texture Count">;
     struct Texture { // This entire section is unused by the remaster.
-        char textureFormat[4] <name="Texture Format", comment="ARGB if empty.">;
-        uint textureUse;
-        uint frameCount       <name="Texture Frame Count">;
-        uint mipMapCount      <name="Texture Mip Map Count">;
-        uint textureWidth     <name="Texture Width">;
-        uint textureHeight    <name="Texture Height">;
-        uint textureSize      <name="Texture Size">;
+        char  textureFormat[4] <name="Texture Format", comment="Either DXT1/3/5 or RGBA if empty.">;
+        uint  textureUse;
+        uint  frameCount       <name="Texture Frame Count">;
+        uint  mipMapCount      <name="Texture Mip Map Count">;
+        uint  textureWidth     <name="Texture Width">;
+        uint  textureHeight    <name="Texture Height">;
+        uint  textureSize      <name="Texture Size">;
         ubyte textureData[textureSize] <name="Texture Data">;
     } Textures[textureCount] <name="Texture", read=textureFormat, optimize=false>;
 };
 
-//---------------------------------------------------------------------
+//-----------------------------------------------------------------------
 
 struct {
     CHR_HEADER Header;
@@ -169,4 +171,4 @@ struct {
     CHR_TEXTURE_DATA textureData <name="Material and Texture Data", optimize=false>;
 } CHR <name="Tomb Raider: Angel of Darkness (Remastered) .CHR Model">;
 
-//---------------------------------------------------------------------
+//-----------------------------------------------------------------------

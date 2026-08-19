@@ -1,0 +1,283 @@
+//-----------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: CLOS.bt
+//   Authors: Dodylectable, Glacier 2 Modding Community
+//   Version: 1.0
+//   Purpose: Reverse engineering IO Interactive's Glacier 2 implementation of
+//          : CloakWorks Shroud Cloth assets in Hitman: Absolution
+//  Category: Models
+// File Mask: *.CLOS
+//  ID Bytes: 
+//   History: 
+//-----------------------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+const uint FIELD_TYPE_INVALID <hidden=true> = 0xFFFFFFFF;
+
+//------------------------------------------------
+//   CloakWorks does NOT use a fixed struct layout.
+//      A .CLOS is a REFLECTION TREE: a generic graph of nodes (objects, arrays, primitives)
+//      each tagged with a name, an optional class name and a set of relative offsets to its sibling
+//      its first child, and its data. IOI's Cloth::Deserialize walks it recursively; this template mirrors that walk.
+//
+//   Reversed byte-exact against shipping samples (a necktie and a jacket).
+//   Field roles that were not confirmed against real bytes are labelled "unknown" rather than guessed.
+//
+//   HOW TO READ THE TREE
+//     * Header: u32 at 0x24 = binaryNodeOffset. The first BinaryNode sits at (0x28 + offset - 4).
+//     * Each BINARY_NODE carries relative offsets:
+//         - nameOffset       -> node + nameOffset                 = name string
+//         - classNameOffset  -> node + classNameOffset + 8        = class name string (IOI's +8 quirk)
+//         - nextOffset       -> node + 0x10 + nextOffset          = next sibling (0 ends the chain)
+//         - childOffset      -> node + 0x14 + childOffset         = first child (objects / arrays<object>)
+//         - dataOffset       -> node + 0x18 + dataOffset          = primitive value / array payload
+//     * Node kind (reliable discriminator):
+//         - childOffset > 0 AND dataSize == 0  -> object or array-of-objects (recurse the child chain)
+//         - dataSize    > 0 AND arrayCount > 0 -> primitive array (payload = dataSize bytes)
+//         - dataSize    > 0 AND arrayCount ==0 -> scalar leaf
+//
+//   MESH GEOMETRY (found on each Simulation subtree)
+//     Two representations are stored:
+//       * SIMULATION grid (ShapeDefinition) - the low-res nodes the solver moves:
+//           numRows, numColumns, numNodes - grid dimensions
+//           startingPositions (float array) - node rest positions, SIMD-packed: each block of 4
+//             nodes is [x0..x3, y0..y3, z0..z3] (12 floats), so arrayCount is a BLOCK count.
+//           startingFlags (int array) - per-node flags; bit 3 (0x08) marks a culled node.
+//       * RENDER mesh (ThickMeshControl - the actual visible surface) - bound to the sim grid:
+//           index32s (u32 array)      - render triangle index buffer
+//           texCoords (float array)   - per-render-vertex UVs
+//           mappedVertCount (u32)     - render vertex count
+//           triIndices (u32 array)    - 3 sim-node indices per render vertex (its bound triangle)
+//           bindingOffsets (float array) - 16 floats per render vertex, laid out as FOUR vec4s
+//             (see BINDING_OFFSET below): barycentric, positionOffset, normalOffset, tangentOffset.
+//
+//   RENDER VERTEX RECONSTRUCTION (mirrors HitmanAbsolutionEditor's GenerateVerticesForThickMesh):
+//     Given the bound sim triangle (a, b, c) and its per-node normals (n1, n2, n3):
+//       dirAB    = normalize(b - a);  dirAC = normalize(c - a)
+//       bindPos  = a*bc.x + b*bc.y + c*bc.z
+//       bindNrm  = n1*bc.x + n2*bc.y + n3*bc.z                      (NOT renormalized)
+//       disp     = -( dot(bindPos-a, n1)*bc.x^2 + dot(bindPos-b, n2)*bc.y^2 + dot(bindPos-c, n3)*bc.z^2 )
+//       adjusted = bindPos + bindNrm * disp                          (curvature correction)
+//       POSITION = adjusted + dirAB*po.x + bindNrm*po.y + dirAC*po.z (offsets in the LOCAL frame -
+//                                                                    this is what gives buttons /
+//                                                                    pockets their depth)
+//       NORMAL   = dirAB*no.x + bindNrm*no.y + dirAC*no.z
+//       TANGENT  = dirAB*to.x + bindNrm*to.y + dirAC*to.z  (w = to.w)
+//     Sim-node normals come from CloakWorks' ClothNormalsUpdater (grid cross-product accumulation).
+//
+//   SKINNING (SkinningTransform subtrees under each Simulation):
+//       guid (u32)            - references a Transform on the ShroudObject; that Transform's
+//                               boneName child names the skeleton bone (e.g. "HM:Export:Neck")
+//       weights (float array) - one weight per SIM node, same SIMD node order as startingPositions;
+//                               per-node totals across all SkinningTransforms sum to 1.0.
+//     Render-vertex weights = barycentric blend of the bound triangle's sim-node weights.
+//
+//   NAME vs VALUE: a node NAMED "boneName" holds a string VALUE like "Neck". 4-byte values on
+//   name-carrying fields (name / boneName / transformName) are 4-char STRINGS, not u32s - size
+//   alone cannot disambiguate them, the field name must.
+//
+//   NOTE: This template surfaces the raw node graph and every node's data VALUES for inspection.
+//   The full render-mesh reconstruction lives in the Blender plugin (data_format_parsers/clos.py).
+//------------------------------------------------
+
+//---------------------------------------------------------------------
+// Reflection field-type tags (only values observed in shipping cloth).
+// The leaf primitiveType word reads 0xFFFFFFFF (kFieldType_Invalid sentinel) on the samples;
+// element widths are derived from dataSize rather than this tag, which is not a clean type flag.
+//---------------------------------------------------------------------
+
+//---------------------------------------------------------------------
+// FILE HEADER
+//
+// A small fixed prolog. Only two words matter for the walk: the file size mirror at +0x00 and the
+// binaryNodeOffset at +0x24. The 0xFFFFFFFF at +0x38 is a constant sentinel in observed files.
+//---------------------------------------------------------------------
+
+typedef struct {
+    uint fileSize         <name="File Size", comment="Mirrors the on-disk size">;
+    FSkip(32); // Reserved
+    uint binaryNodeOffset <name="Binary Node Offset", comment="Relative; First Node = 0x28 + this - 4">;
+    FSkip(16); // Reserved
+    uint Sentinel         <comment="0xFFFFFFFF", format=hex>;
+} CLOS_HEADER <read=Str("File Size: %u bytes | First Node Offset: %u", this.fileSize, 0x28 + this.binaryNodeOffset - 4)>;
+
+//---------------------------------------------------------------------
+// BINARY NODE (fixed 52-byte part) + inline data
+//
+// The variable strings/data referenced by the offsets below live AFTER this fixed part (inline in
+// the file). This struct maps the fixed header AND overlays the node's actual payload so the tree
+// view shows real VALUES, not just node names:
+//   * a scalar leaf     -> its uint / float / string value
+//   * a primitive array -> the float / uint / string payload (positions, indices, texcoords, ...)
+//   * an object / array<object> -> no inline payload (its data lives in child nodes)
+//
+// IMPORTANT: a node's NAME and its VALUE are two different things. e.g. a node NAMED "boneName" has
+// a string VALUE like "HM:Export:Neck" - the name is what the field is called, the value is its
+// contents. Earlier revisions showed only the name; this one shows both.
+//---------------------------------------------------------------------
+
+// Payload overlays - picked per node kind so the data block is actually parsed, not skipped.
+typedef struct (uint byteSize) { char  Value[byteSize]; } NODE_STRING <read=this.Value>;
+typedef struct (uint count)    { uint  Value[count];    } NODE_UINT_ARRAY;
+typedef struct (uint count)    { float Value[count];    } NODE_FLOAT_ARRAY;
+typedef struct                 { uint  Value;           } NODE_UINT   <read=Str("%u", this.Value)>;
+typedef struct                 { float Value;           } NODE_FLOAT  <read=Str("%f", this.Value)>;
+
+typedef struct {
+    local int64 nodeStart <hidden=true> = FTell();
+
+    uint nameOffset           <name="Name Offset",         comment="Node + this = name string">;
+    uint nameLength           <name="Name Length">;
+    uint classNameOffset      <name="Class Name Offset",   comment="Node + this + 8 = class name string">;
+    uint classNameLength      <name="Class Name Length">;
+    uint nextOffset           <name="Next Sibling Offset", comment="Node + 0x10 + this; 0 ends the chain">;
+    uint childOffset          <name="First Child Offset",  comment="Node + 0x14 + this; objects / arrays<object>">;
+    uint dataOffset           <name="Data Offset",         comment="Node + 0x18 + this; primitive value / array payload">;
+    uint dataSize             <name="Data Size",           comment="Bytes of a scalar value or the whole primitive array">;
+    uint arrayCount           <name="Array Count",         comment="element/block count for arrays (SIMD block count for packed floats)">;
+    uint arrayElementInfo     <name="Array Element Info",  comment="Varies with element width; NOT a clean type tag - unknown">;
+    uint primitiveType        <name="Primitive Type",      comment="0xFFFFFFFF (kFieldType_Invalid) on leaf primitives in samples", format=hex>;
+    uint Unknown0             <name="Unknown A",           comment="Trailing fixed-part word; role unconfirmed", format=hex>;
+    uint Unknown1             <name="Unknown B",           comment="Trailing fixed-part word; role unconfirmed", format=hex>;
+
+    // ----- Inline name / class strings -----
+    // Overlaid at their resolved positions so the template surfaces them as real string fields.
+    local int64 Resume <hidden=true> = FTell();
+    if (nameLength > 0 && nameLength < 256) {
+        FSeek(nodeStart + nameOffset);
+        NODE_STRING Name(nameLength);
+    }
+    if (classNameLength > 0 && classNameLength < 256) {
+        FSeek(nodeStart + classNameOffset + 8);
+        NODE_STRING className(classNameLength) <name="Class Name">;
+    }
+
+    // ----- Inline data payload (the node's VALUE) -----
+    // childOffset>0 & dataSize==0 -> object / array<object>: value lives in child nodes (nothing here).
+    // dataSize>0 & arrayCount>0   -> primitive array: read the whole dataSize span.
+    // dataSize>0 & arrayCount==0  -> scalar leaf: one uint / float / string.
+    if (dataSize > 0) {
+        FSeek(nodeStart + 0x18 + dataOffset);
+        if (arrayCount > 0) { // Primitive array. Element role is inferred from dataSize (index/tri => u32, geometry => float).
+            if (IsFloatField(this)) NODE_FLOAT_ARRAY Data(dataSize / 4) <name="Data (Floating Points)">;
+            else                    NODE_UINT_ARRAY  Data(dataSize / 4) <name="Data (Unsigned Integers)">;
+        } else { // Scalar leaf.
+            if      (dataSize == 4) NODE_UINT   Data                    <name="Value">;
+            else if (dataSize > 4)  NODE_STRING Data(dataSize)          <name="Value (Strings)">;
+            else                    NODE_STRING Data(dataSize)          <name="Value (Bytes)">;
+        }
+    }
+    FSeek(Resume);
+} BINARY_NODE <read=ReadBinaryNode, optimize=false>;
+
+// Decide whether a primitive array holds floats.
+// - Index/Flag/Tri buffers are uint32.
+// - Geometry (Positions, Normals, TexCoords, Weights, Offsets, Matrices, etc.) are float.
+// Keyed on the node's own name so we never misread a stream as the wrong type.
+int IsFloatField(BINARY_NODE &n) {
+    local string Name = "";
+    if (n.nameLength > 0 && n.nameLength < 256) Name = ReadString(startof(n) + n.nameOffset, n.nameLength);
+    if (Strstr(Name, "index")   >= 0) return false;
+    if (Strstr(Name, "Indices") >= 0) return false;
+    if (Strstr(Name, "tri")     >= 0) return false;
+    if (Strstr(Name, "flag")    >= 0) return false;
+    if (Strstr(Name, "Flags")   >= 0) return false;
+    if (Strstr(Name, "Count")   >= 0) return false;
+    return true;
+}
+
+string ReadBinaryNode(BINARY_NODE &n) {
+    // Peek the inline name string (immediately reachable via nameOffset) for a friendly label.
+    local string Label = "";
+    if      (n.nameLength > 0 && n.nameLength < 256)           { Label = ReadString(startof(n) + n.nameOffset, n.nameLength); }
+    else if (n.classNameLength > 0 && n.classNameLength < 256) { Label = ReadString(startof(n) + n.classNameOffset + 8, n.classNameLength); }
+
+    // Peek a string VALUE too when this is a string leaf, so names like boneName show their contents.
+    local string valuePeek = "";
+    if (n.dataSize > 4 && n.arrayCount == 0) valuePeek = ReadString(startof(n) + 0x18 + n.dataOffset, n.dataSize);
+
+    local string Kind;
+    if      (n.childOffset > 0 && n.dataSize == 0) Kind = "Object / Array";
+    else if (n.dataSize > 0 && n.arrayCount > 0)   Kind = "Primitive[]";
+    else if (n.dataSize > 0)                       Kind = "Scalar";
+    else                                           Kind = "Empty";
+
+    string S;
+    if (Strlen(valuePeek) > 0) SPrintf(S, "%s = \"%s\" | [%s]", Label, valuePeek, Kind);
+    else SPrintf(S, "%s | [%s] | Data Size: %u bytes | Array Count: %u", Label, Kind, n.dataSize, n.arrayCount);
+    return S;
+}
+
+//---------------------------------------------------------------------
+// SIMD-PACKED POSITION BLOCK
+//
+// startingPositions is laid out as blocks of 4 nodes: [x0..x3, y0..y3, z0..z3]. One block = 12
+// floats = 48 bytes and covers 4 cloth nodes. Overlay this on the payload to read positions.
+//---------------------------------------------------------------------
+
+typedef struct { VEC4F X, Y, Z; } CLOTH_POSITION_BLOCK;
+
+//---------------------------------------------------------------------
+// RENDER-VERTEX BINDING RECORD (overlay on the bindingOffsets payload)
+//
+// One 64-byte record per render vertex - four vec4s. Pairs with triIndices (3 sim-node indices
+// per render vertex). See the reconstruction formula in the header comment: positionOffset,
+// normalOffset and tangentOffset are expressed in the bound triangle's LOCAL frame
+// (dirAB, blended normal, dirAC), which is what gives buttons / pocket flaps their depth off
+// the cloth plane. barycentric.xyz sums to 1; the .w lanes are padding in observed files.
+//---------------------------------------------------------------------
+
+typedef struct {
+    VEC4F Barycentric    <name="Barycentric Weights", comment="XYZ blend the bound sim triangle; Sums to 1">;
+    VEC4F positionOffset <name="Position Offset",     comment="In the local (dirAB, bindNRM, dirAC) frame">;
+    VEC4F normalOffset   <name="Normal Offset",       comment="Render-vertex normal in the local frame">;
+    VEC4F tangentOffset  <name="Tangent Offset",      comment="Render-vertex tangent in the local frame; W: tangent sign">;
+} BINDING_OFFSET <read=Str("Barycentric: (%.3f, %.3f, %.3f) | VTX Position Offset: (%.3f, %.3f, %.3f)",
+                           this.Barycentric.X, this.Barycentric.Y, this.Barycentric.Z,
+                           this.positionOffset.X, this.positionOffset.Y, this.positionOffset.Z)>;
+
+//-----------------------------------------------------------------------------
+
+struct {
+    CLOS_HEADER Header;
+    struct {
+        // Jump to the first node: (0x28 + binaryNodeOffset - 4).
+        local int64 firstNode <hidden=true> = 0x28 + Header.binaryNodeOffset - 4;
+
+        // Explicit visit stack. Sized generously; Observed files hold a few hundred nodes.
+        local int64 Stack[8192] <hidden=true>;
+        local int   SP          <hidden=true> = 0;
+        Stack[SP] = firstNode; SP++;
+
+        local uint  Guard       <hidden=true> = 0;
+        local int64 Position    <hidden=true>;
+        local uint  childOffset <hidden=true>;
+        local uint  nextOffset  <hidden=true>;
+        local uint  dataSize    <hidden=true>;
+
+        while (SP > 0 && Guard < 100000) {
+            SP--;
+            Position = Stack[SP];
+            if (Position < 0 || Position + 52 > FileSize()) { Guard++; continue; }
+
+            FSeek(Position);
+            BINARY_NODE Node;
+
+            // Peek the child / sibling / data size we need to schedule the rest of the walk.
+            // We read them straight from the file so this stays independent of struct member access.
+            dataSize    = ReadUInt(Position + 0x1C);
+            childOffset = ReadUInt(Position + 0x14);
+            nextOffset  = ReadUInt(Position + 0x10);
+
+            // Push the next sibling first, then the child so children are visited before siblings (depth-first, matching the on-disk order and IOI's recursion).
+            if (nextOffset > 0 && SP < 8191)                   { Stack[SP] = Position + 0x10 + nextOffset;  SP++; }
+            if (childOffset > 0 && dataSize == 0 && SP < 8191) { Stack[SP] = Position + 0x14 + childOffset; SP++; }
+
+            Guard++;
+        }
+    } Nodes;
+} CLOS <name="CloakWorks Shroud .CLOS Cloth Asset">;
+
+//-----------------------------------------------------------------------------

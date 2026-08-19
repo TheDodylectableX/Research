@@ -10,6 +10,7 @@
 //  ID Bytes: 
 //   History: 
 //--------------------------------------------------------------------------------------
+
 // The X360 textures line up exactly with the N64 counterparts up until the 3502th texture, After that the rest is new additions. (2245 textures)
 // The archives are compressed in LZX algorithm.
 

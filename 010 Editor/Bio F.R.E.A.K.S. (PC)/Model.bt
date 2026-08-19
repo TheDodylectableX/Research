@@ -1,0 +1,223 @@
+//------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: Model.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Midway Studios' Bio F.R.E.A.K.S. model format
+//  Category: Models
+// File Mask: *.GRAPHICS_ASSET_1 | *.GRAPHICS_ASSET_2
+//  ID Bytes: 
+//   History: 
+//------------------------------------------------------------------------------
+
+// Glide based models seem to have a different skeleton structure? I'm currently looking at OpenGL anyway.
+// Skeletons "undeform" based on transformation data from the animations themselves, Without it the models are still crumpled in local space.
+
+LittleEndian();
+#include "../Common.bt"
+
+typedef enum <uint> {
+    RGB_888   = 0,
+    RGBA_8888 = 1
+} IMAGE_FORMAT;
+
+//------------------------------------------------------------------------------
+
+typedef struct {
+    ushort faceCount             <comment="Total polygon count">;
+    ushort vertexCount           <comment="Total unique geometric vertices">;
+    ushort vertexAttributesCount <comment="UV-split vertex count (may equal vertexCount)">;
+    ushort totalIndexCount       <comment="Always faceCount * 3">;
+    ushort boneCount             <comment="Total engine bone/node count (includes IK and helper nodes). boneNodes = boneCount-1 entries; boneRecords count is derived from file structure, not this field.">;
+    ushort hiResImageCount       <comment="Hi-res image count (characters: 256x256 RGB; levels: 128x128 RGBA)">;
+    uint   lowResImageCount      <comment="Low-res image count (characters: 32x32 or 32x64 RGB; levels: always 0)">;
+    FSkip(8); // Reserved; always zero
+} MODEL_HEADER;
+
+//------------------------------------------------------------------------------
+
+typedef struct {
+    VEC3F  faceNormal        <comment="Surface normal vector">;
+    VEC2F  faceUVs[3]        <comment="Per-vertex texture coordinates">;
+    VEC3US vertexIndices     <comment="Indices into vertex position stream">;
+    VEC3US attributeIndices  <comment="Indices into attribute stream (UV-split remapping)">;
+    ushort materialID        <comment="Sub-mesh / material slot ID", format=hex>;
+    byte   padding[6]        <comment="Alignment padding">;
+} FACE_RECORD <read=Str("Mat: 0x%04X | Verts: (%d, %d, %d)", this.materialID, this.vertexIndices.X, this.vertexIndices.Y, this.vertexIndices.Z)>;
+
+//------------------------------------------------------------------------------
+
+// skinBoneRef encoding:
+//   The bone index is stored duplicated across two consecutive bytes: Stored value = boneIndex | (boneIndex << 8)   i.e. boneIndex * 0x0101
+//   Examples: bone 0 -> 0x00000000, bone 1 -> 0x00000101, bone 5 -> 0x00000505
+//   Decode:   boneIndex = skinBoneRef & 0xFF
+//
+// Un-crumpling formula (vertices are in collapsed model-local space):
+//   vec4  localPos  = { x, y, z, 1.0f };
+//   int   bone      = skinBoneRef & 0xFF;
+//   vec3  worldPos  = localPos * boneRecords[bone].worldTransform;
+//   (row-vector multiplied by row-major 4x4, DirectX/row-major convention)
+typedef struct {
+    uint  skinBoneRef <comment="Bone assignment. Packed as boneIndex * 0x0101. Decode: boneIndex = value & 0xFF.", format=hex>;
+    VEC3F Positions   <comment="Vertex position in collapsed model-local space. Multiply by boneRecords[boneIndex].worldTransform to get world position.">;
+} VERTEX_POS <read=Str("Bone: %d | (%.4f, %.4f, %.4f)", this.skinBoneRef & 0xFF, this.Position.X, this.Position.Y, this.Position.Z)>;
+
+typedef struct { VEC3F Normals; } VERTEX_NORMAL <read=Str("(%.4f, %.4f, %.4f)", this.Normal.X, this.Normal.Y, this.Normal.Z)>;
+
+//------------------------------------------------------------------------------
+
+// Compact kinematic descriptor for each bone in the hierarchy, Used for constraint / IK chain evaluation at runtime.
+//
+// nodeParams[7]: exact decomposition not yet determined.
+//   Values are in world-coordinate float range (not unit-normalized) so these are NOT a standard rotation quaternion.
+//   Maybe two VEC3F points (e.g. bone head + tail) plus a scalar, or some proprietary TRS encoding. Marked for future research.
+//
+// parentIndex = -1 (stored as 0xFF, signed byte) = root node.
+typedef struct {
+    float  nodeParams[7] <comment="7 floats, exact layout undetermined. Values are world-scale floats (not unit quaternions). Possibly bone head/tail positions + scalar.">;
+    uint   nodeFlags     <comment="Runtime behavioral flags", format=hex>;
+    ubyte  nodeIndex     <comment="Bone index in the engine hierarchy">;
+    byte   parentIndex   <comment="Parent bone index; -1 (0xFF) = root">;
+    FSkip(2); // Alignment padding
+} HIERARCHY_NODE <read=Str("Node: %d | Parent: %d | Flags: 0x%X", this.nodeIndex, this.parentIndex, this.nodeFlags)>;
+
+//------------------------------------------------------------------------------
+
+// Full deformer bone record used for vertex skinning. Contains three 4x4 row-major matrices and two packed hierarchy link fields.
+//
+// Matrix layout (row-major, DirectX convention):
+//   Row 0-2 = rotation/scale axes (X, Y, Z)
+//   Row 3   = translation (tx, ty, tz, 1.0)
+//
+//   restPose       [+000, 64 bytes]
+//     Local rest/bind-pose transform. T-pose reference for this bone.
+//
+//   currentPose    [+064, 64 bytes]
+//     Runtime copy of restPose. Starts identical at load time.
+//     The animation system overwrites this every frame.
+//
+//   worldTransform [+128, 64 bytes]
+//     Pre-multiplied world-space transform (full parent chain applied).
+//     *** USE THIS MATRIX TO UN-CRUMPLE VERTICES: ***
+//         vec4 worldPos = { vx, vy, vz, 1.0f } * worldTransform
+//     worldTransform[3].XYZ = world-space bone position.
+//
+// Tree links:
+//   childAndSibling [+192, 4 bytes]
+//     Packed linked-list pointers for hierarchy traversal:
+//       bits[31:16] = nextSiblingIndex: next bone with the same parent (0xFFFF = none)
+//       bits[15:0]  = firstChildIndex : this bone's first child (0xFFFF = leaf)
+//
+//   parentLink [+196, 4 bytes]
+//     Encodes the parent bone index in the low 16 bits; 0xFFFF = root (no parent).
+//     The high 16 bits vary by file version: 0x826A on some models, 0x8284 on others,
+//     0x0000 on others. Don't rely on the high word; use only lo16 for the index.
+typedef struct {
+    VEC4F restPose[4]       <comment="Local rest/bind-pose matrix (row-major 4x4). Row 3 = local translation.">;
+    VEC4F currentPose[4]    <comment="Runtime current-pose matrix. Starts = restPose at load; overwritten by animation.">;
+    VEC4F worldTransform[4] <comment="World-space accumulated transform (parent chain pre-multiplied). USE THIS for skinning: worldPos = { vx,vy,vz,1 } * worldTransform.">;
+
+    uint childAndSibling    <comment="Packed child/sibling links: hi16 = nextSiblingIndex, lo16 = firstChildIndex. 0xFFFF in either field = null (no sibling / leaf bone).", format=hex>;
+
+    // parentLink lo16 = parent bone record index (0xFFFF = root, no parent).
+    // parentLink hi16 varies by file: 0x826A, 0x8284, or 0x0000. Not a reliable identifier.
+    uint parentLink         <comment="lo16 = parent bone index (0xFFFF = root). hi16 is a version-dependent magic word (0x826A, 0x8284, or 0x0000), use only lo16.", format=hex>;
+} BONE_RECORD <
+    read=Str("WorldPos: (%.3f, %.3f, %.3f) | Parent: 0x%04X | Child: 0x%04X | Sibling: 0x%04X",
+             this.worldTransform[3].X, this.worldTransform[3].Y, this.worldTransform[3].Z,
+             this.parentLink      & 0xFFFF, this.childAndSibling & 0xFFFF,
+             (this.childAndSibling >> 16) & 0xFFFF)>;
+
+//------------------------------------------------------------------------------
+
+// Bone record count is not stored anywhere in the file header.
+// It is derived at parse time by checking offset +60 of each candidate record:
+//   ReadUInt(FTell() + 60) == 0x3F800000   (i.e. the float value 1.0)
+//
+// Offset +60 is restPose[3][3] - the homogeneous W component of the last row
+// of the rest-pose matrix. This is mathematically guaranteed to be exactly 1.0f
+// in any valid affine transform (rotation + translation), regardless of file version
+// or which magic word appears in parentLink.
+//
+// Texture pixel data at that offset will essentially never equal 0x3F800000,
+// so this serves as a reliable, version-independent termination condition.
+// Validated: Zipperhead (32 records), Sabotage (30), Fan (1), NewYork (1).
+typedef struct {
+    // Spatial descriptor for the whole mesh.
+    // Exact semantics undetermined: values are world-scale floats,
+    // likely a bounding sphere (center XYZ + radius) or a scale/offset hint.
+    VEC4F meshBounds <comment="Mesh spatial descriptor. Likely bounding sphere (center XYZ + radius) or scale hint. Exact layout undetermined.">;
+
+    // Two count/flag fields whose exact meaning is not yet known.
+    // Neither reliably encodes bone record count across all known model files.
+    // Observed unkA values: 1, 2, 64.
+    // Observed unkB values: 265, 537, 65280. Note: 65280 = 0xFF00 in level files
+    // suggests unkB may be a flags/bitmask field in some variants.
+    uint unkA <comment="Unknown. Observed: 1, 2, 64. Does not encode bone record count.", format=hex>;
+    uint unkB <comment="Unknown. Observed: 265, 537, 65280 (0xFF00 in level files; maybe a bitmask).", format=hex>;
+
+    // Kinematic hierarchy nodes — one per bone except the implicit root.
+    if (Header.boneCount > 0) HIERARCHY_NODE boneNodes[Header.boneCount - 1] <optimize=false, comment="Kinematic chain for IK/constraints. Count = boneCount - 1.">;
+
+    // Bone records — loop while restPose[3][3] at offset +60 equals 1.0f.
+    // ReadUInt(FTell() + 60) peeks at that field without advancing the cursor.
+    while (!FEof() && ReadUInt(FTell() + 60) == 0x3F800000) BONE_RECORD boneRecords <optimize=false, comment="200-byte deformer bone: restPose + currentPose + worldTransform + tree links.">;
+} SKELETON_BLOCK <comment="Skeleton block: hierarchy nodes + bone records">;
+
+//------------------------------------------------------------------------------
+
+// Texture data immediately follows the last bone record with no gap.
+// Each image has a 16-byte header followed by tightly packed pixel data.
+// The format field repeats in every image header and is consistent within a file.
+//
+// imagePixelFormat:
+//   0 = RGB888   (3 bytes/pixel): character model files
+//   1 = RGBA8888 (4 bytes/pixel): level / stage environment files
+//
+// Image dimensions vary by model:
+//   Characters: hiRes typically 256x256, lowRes typically 32x32 or 32x64
+//   Levels:     hiRes typically 128x128, lowRes = none (lowResImageCount = 0)
+typedef struct {
+    IMAGE_FORMAT imageFormat <comment="Pixel format: 0 = RGB_888 (3 BPP) | 1 = RGBA_8888 (4 BPP)">;
+    FSkip(4); // Reserved
+    uint imageWidth;
+    uint imageHeight;
+
+    if (imageWidth > 0 && imageHeight > 0) {
+        if (imageFormat == RGBA_8888) { VEC4SB pixelData[imageWidth * imageHeight] <optimize=true>; }
+        else { VEC3SB pixelData[imageWidth * imageHeight] <optimize=true>; }
+    }
+} TEXTURE_IMAGE <read=Str("Image Dimensions: %ux%u | Image Format: %s", this.imageWidth, this.imageHeight, this.imageFormat == RGBA_8888 ? "RGBA8888" : "RGB888")>;
+
+//------------------------------------------------------------------------------
+
+MODEL_HEADER Header;
+
+if (Header.faceCount > 0) struct { FACE_RECORD face[Header.faceCount] <optimize=false>; } FaceDataStream;
+
+// Vertex positions array has vertexCount+3 total entries:
+//   [0..1]             = two bounding box values (min/max mesh extents, not real verts)
+//   [2..vertexCount+2] = actual vertices (vertexCount+1 entries)
+if (Header.vertexCount > 0) {
+    struct {
+        VERTEX_POS boundingBox[2] <comment="Bounding box min/max values", optimize=false>;
+        VERTEX_POS verts[Header.vertexCount + 1] <optimize=false>;
+    } VertexPositions;
+}
+
+if (Header.vertexCount > 0) struct { VERTEX_NORMAL normals[Header.vertexAttributesCount] <optimize=false>; } VertexNormals;
+
+// Skeleton
+SKELETON_BLOCK Skeleton <comment="Hierarchy nodes + bone records">;
+
+// Textures start immediately after the last bone record
+local int totalImages <hidden=true> = (int)Header.hiResImageCount + (int)Header.lowResImageCount;
+if (totalImages > 0 && !FEof()) {
+    struct {
+        local int i <hidden=true>;
+        for (i = 0; i < totalImages; i++) { TEXTURE_IMAGE Image; }
+    } Textures <comment="Texture chain: hi-res images first then low-res">;
+}
+
+//------------------------------------------------------------------------------

@@ -1,0 +1,312 @@
+//-------------------------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: LTB.bt
+//   Authors: Dodylectable, haekb (Initial Research)
+//   Version: 1.0
+//   Purpose: Reverse engineering Monolith Productions' LithTech Engine model and animation format
+//  Category: Models / Animations
+// File Mask: *.LTB
+//  ID Bytes: 01 00 09 00
+//   History: 
+//-------------------------------------------------------------------------------------------------
+
+// https://github.com/haekb/io_scene_lithtech
+
+LittleEndian();
+#include "../Common.bt"
+
+local int i <hidden=true> = 0
+local int j <hidden=true> = 0;
+
+//-------------------------------------------------------------------------------------------------
+
+typedef enum <int> {
+    MESH_RIGID          = 4,
+    MESH_SKELETAL       = 5,
+    MESH_VERTEXANIMATED = 6,
+    MESH_NULL           = 7
+} MESH_TYPE;
+
+typedef enum <int> {
+    COMPRESSION_NONE            = 0,
+    COMPRESSION_RELEVANT        = 1,
+    COMPRESSION_RELEVANT_16     = 2,
+    COMPRESSION_RELEVANT_ROT_16 = 3
+} ANIMATION_COMPRESSION;
+
+// Bitmasks for dynamic vertex buffer
+local int VTX_POSITION    <hidden=true> = 0x0001;
+local int VTX_NORMAL      <hidden=true> = 0x0002;
+local int VTX_COLOUR      <hidden=true> = 0x0004;
+local int VTX_UV_SETS_1   <hidden=true> = 0x0010;
+local int VTX_UV_SETS_2   <hidden=true> = 0x0020;
+local int VTX_UV_SETS_3   <hidden=true> = 0x0040;
+local int VTX_UV_SETS_4   <hidden=true> = 0x0080;
+local int VTX_BASISVECTOR <hidden=true> = 0x0100;
+
+//-------------------------------------------------------------------------------------------------
+
+typedef struct { float X, Y, Z, W; } Quaternion;
+
+typedef struct { Quaternion M[4]; } LTMatrix;
+
+typedef struct {
+    short Length;
+    if (Length > 0) char Text[Length];
+} LTString <read=ReadLTString>;
+
+string ReadLTString(LTString &s) { return (exists(s.Text)) ? s.Text : ""; }
+
+typedef struct { LTMatrix Matrix; } OBB;
+
+//-------------------------------------------------------------------------------------------------
+
+//--- File Header
+typedef struct {
+    ushort FileType;
+    ushort FileVersion;
+    FSkip(16); // Reserved
+    uint MeshVersion;
+
+    uint Keyframes;
+    uint ParentAnims;
+    uint NodeCount;
+    uint PieceCount;
+    uint ChildModelCount;
+    uint FaceCount;
+    uint VertexCount;
+    uint VertexWeights;
+    uint LODCount;
+    uint SocketCount;
+    uint MorphWeightSetCount;
+    uint StringCount;
+    uint StringLength;
+    uint VertexAnimationDataSize;
+    uint AnimationData;
+    LTString CommandString;
+    float Radius;
+    uint OBBCount;
+    if (OBBCount > 0) OBB OBBData[OBBCount];
+    uint PieceHeaderCount;
+} Header <name="Header">;
+
+//--- Geometry Structures
+typedef struct {
+    ushort BoneIndexStart;
+    ushort BoneIndexCount;
+    VEC4UB BoneList;
+    uint IndexBufferIndex;
+} BoneSet;
+
+typedef struct {
+    MESH_TYPE Type;
+    if (Type == MESH_NULL) { int Filler; return; }
+
+    uint ObjSize;
+    uint VertCount;
+    uint FaceCount;
+    uint MaxBonesPerFace;
+    uint MaxBonesPerVert;
+
+    if (Type == MESH_RIGID) {
+        uint DataType[4];
+        uint Bone;
+
+        for (i = 0; i < 4; i++) {
+            for (j = 0; j < VertCount; j++) {
+                if (DataType[i] & VTX_POSITION) VEC3F Position;
+                if (DataType[i] & VTX_NORMAL) VEC3F Normal;
+                if (DataType[i] & VTX_COLOUR) uint RGBA <format=hex>;
+                if (DataType[i] & VTX_UV_SETS_1) VEC2F UV1;
+                if (DataType[i] & VTX_UV_SETS_2) VEC2F UV2;
+                if (DataType[i] & VTX_UV_SETS_3) VEC2F UV3;
+                if (DataType[i] & VTX_UV_SETS_4) VEC2F UV4;
+                if (DataType[i] & VTX_BASISVECTOR) { VEC3F S; VEC3F T; }
+            }
+        }
+        VEC3US IndexList[FaceCount];
+    } else if (Type == MESH_SKELETAL) {
+        char ReindexedBones;
+        uint DataType[4];
+        char MatrixPalette;
+
+        if (MatrixPalette == 0) {
+            for (i = 0; i < 4; i++) {
+                for (j = 0; j < VertCount; j++) {
+                    if (DataType[i] & VTX_POSITION) {
+                        VEC3F Position;
+                        if (MaxBonesPerFace >= 2) float Blend1;
+                        if (MaxBonesPerFace >= 3) float Blend2;
+                        if (MaxBonesPerFace >= 4) float Blend3;
+                    }
+                    if (DataType[i] & VTX_NORMAL) VEC3F Normal;
+                    if (DataType[i] & VTX_COLOUR) uint RGBA <format=hex>;
+                    if (DataType[i] & VTX_UV_SETS_1) VEC2F UV1;
+                    if (DataType[i] & VTX_UV_SETS_2) VEC2F UV2;
+                    if (DataType[i] & VTX_UV_SETS_3) VEC2F UV3;
+                    if (DataType[i] & VTX_UV_SETS_4) VEC2F UV4;
+                    if (DataType[i] & VTX_BASISVECTOR) { VEC3F S; VEC3F T; }
+                }
+            }
+            VEC3US IndexList[FaceCount];
+            uint BoneSetCount;
+            if (BoneSetCount > 0) BoneSet BoneSets[BoneSetCount] <optimize=false>;
+
+        } else {
+            uint MinBone;
+            uint MaxBone;
+
+            if (ReindexedBones) {
+                uint ReindexedBoneCount;
+                if (ReindexedBoneCount > 0) int ReindexedBoneList[ReindexedBoneCount];
+            }
+
+            for (i = 0; i < 4; i++) {
+                for (j = 0; j < VertCount; j++) {
+                    if (DataType[i] & VTX_POSITION) {
+                        if (MaxBonesPerVert >= 2) { VEC3F Position; float Blend1; }
+                        if (MaxBonesPerVert >= 3) float Blend2;
+                        if (MaxBonesPerVert >= 4) float Blend3;
+                        if (MaxBonesPerVert >= 2) int Index <comment="Must be last">;
+                    }
+                    if (DataType[i] & VTX_NORMAL) VEC3F Normal;
+                    if (DataType[i] & VTX_COLOUR) uint RGBA <format=hex>;
+                    if (DataType[i] & VTX_UV_SETS_1) VEC2F UV1;
+                    if (DataType[i] & VTX_UV_SETS_2) VEC2F UV2;
+                    if (DataType[i] & VTX_UV_SETS_3) VEC2F UV3;
+                    if (DataType[i] & VTX_UV_SETS_4) VEC2F UV4;
+                    if (DataType[i] & VTX_BASISVECTOR) { VEC3F S; VEC3F T; }
+                }
+            }
+            VEC3US IndexList[FaceCount];
+        }
+    }
+} Piece;
+
+typedef struct {
+    int TextureCount;
+    int Textures[4];
+    int RenderStyle;
+    char RenderPriority;
+    Piece MeshData;
+    char NodesUsedCount;
+    if (NodesUsedCount > 0) char NodesUsed[NodesUsedCount];
+} LOD;
+
+typedef struct {
+    LTString Name;
+    int LODCount;
+    if (LODCount > 0) float LODDistances[LODCount];
+    int LODMin;
+    int LODMax;
+    if (LODCount > 0) LOD LODs[LODCount] <optimize=false>;
+} PieceHeader <read=this.Name.Text>;
+
+//--- Hierarchy Structures
+struct Node {
+    LTString Name;
+    ushort Index;
+    char Flags;
+    VEC4F Matrix[4];
+    uint ChildrenCount;
+    if (ChildrenCount > 0) struct Node Children[ChildrenCount] <optimize=false>;
+};
+
+typedef struct {
+    LTString Name;
+    uint WeightCount;
+    if (WeightCount > 0) float Weights[WeightCount];
+} WeightSet <read=this.Name.Text>;
+
+typedef struct {
+    uint WeightSetCount;
+    if (WeightSetCount > 0) WeightSet WeightSets[WeightSetCount] <optimize=false>;    
+} WeightSetHeader;
+
+typedef struct {
+    uint ChildModelCount;
+    if (ChildModelCount > 1) LTString ChildModels[ChildModelCount - 1] <optimize=false>;
+} ChildModelHeader;
+
+typedef struct {
+    uint NodeIndex;
+    LTString Name;
+    VEC4F Rotation;
+    VEC3F Position;
+    VEC3F Scale;
+} Socket <read=this.Name.Text>;
+
+typedef struct {
+    uint SocketCount;
+    if (SocketCount > 0) Socket Sockets[SocketCount] <optimize=false>;
+} SocketHeader;
+
+//--- Animation Structures
+typedef struct {
+    uint Time;
+    LTString CommandString;
+} KeyFrame;
+
+typedef struct (ANIMATION_COMPRESSION CompressionType, int KeyframeCount) {
+    if (CompressionType == COMPRESSION_NONE) {
+        char IsVertexAnimation;
+        if (IsVertexAnimation == 0) {
+            VEC3F Translations[KeyframeCount] <optimize=false>;
+            VEC4F Rotations[KeyframeCount]    <optimize=false>;
+        }
+    }
+    else if (CompressionType == COMPRESSION_RELEVANT) {
+        uint KeyPosCount; if (KeyPosCount > 0) VEC3F Positions[KeyPosCount] <optimize=false>;
+        uint KeyRotCount; if (KeyRotCount > 0) VEC4F Rotations[KeyRotCount] <optimize=false>;
+    }
+    else if (CompressionType == COMPRESSION_RELEVANT_16) {
+        uint KeyPosCount; if (KeyPosCount > 0) VEC3SS Positions[KeyPosCount] <optimize=false>;
+        uint KeyRotCount; if (KeyRotCount > 0) VEC4SS Rotations[KeyRotCount] <optimize=false>;
+    }   
+    else if (CompressionType == COMPRESSION_RELEVANT_ROT_16) {
+        uint KeyPosCount; if (KeyPosCount > 0) VEC3F  Positions[KeyPosCount] <optimize=false>;
+        uint KeyRotCount; if (KeyRotCount > 0) VEC4SS Rotations[KeyRotCount] <optimize=false>;
+    }  
+} AnimTransform;
+
+typedef struct (int NodeCount) {
+    VEC3F Dimensions;
+    LTString Name;
+    ANIMATION_COMPRESSION CompressionType;
+    uint Interpolation;
+    uint KeyframeCount;
+    if (KeyframeCount > 0) KeyFrame Keyframes[KeyframeCount] <optimize=false>;
+    AnimTransform Transforms(CompressionType, KeyframeCount)[NodeCount] <optimize=false>;
+} Animation <read=this.Name.Text>;
+
+typedef struct (int NodeCount) {
+    uint AnimCount;
+    if (AnimCount > 0) Animation Animations(NodeCount)[AnimCount] <optimize=false>;
+} AnimHeader;
+
+typedef struct {
+    LTString Name;
+    VEC3F Dimensions;
+    VEC3F Translation;
+} AnimBinding <read=this.Name.Text>;
+
+typedef struct {
+    uint BindingCount;
+    if (BindingCount > 0) AnimBinding Bindings[BindingCount] <optimize=false>;
+} AnimBindingHeader;
+
+//-------------------------------------------------------------------------------------------------
+
+struct {
+    Header LTBHeader;
+    if (LTBHeader.PieceHeaderCount > 0) PieceHeader Pieces[LTBHeader.PieceHeaderCount] <optimize=false>;
+    if (LTBHeader.NodeCount > 0) struct Node HierarchyNodes <name="Hierarchy Nodes", read=this.Name.Text>;
+    WeightSetHeader WeightSets <name="Morph Weight Sets">;
+    ChildModelHeader ChildModels <name="Child Models">;
+    AnimHeader Animations(LTBHeader.NodeCount);
+    SocketHeader Sockets;
+    AnimBindingHeader AnimBindings <name="Animation Bindings">;
+} LTB <name="Monolith Productions LithTech .LTB Model | Animation File">;
+
+//-------------------------------------------------------------------------------------------------

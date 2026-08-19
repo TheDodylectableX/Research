@@ -1,0 +1,66 @@
+//---------------------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: RLE.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering the compressed archives from Daredevil: The Man Without Fear
+//  Category: Archives
+// File Mask: *.RLE
+//  ID Bytes:
+//   History:
+//---------------------------------------------------------------------------------------------
+
+// This is a compressed byte-oriented RLE (Run Length Encoding) wrapper over the actual .dat archive the game uses.
+
+LittleEndian();
+
+//-----------------------------------------------------------------------------------------
+
+typedef struct {
+    uint uncompressedSize <name="Uncompressed Size", comment="Exact file size of the FFDAT (.dat) stream after decompression">;
+} RLE_HEADER <read=Str("Uncompressed Archive Size: %u bytes", this.uncompressedSize)>;
+
+typedef struct {
+    ubyte Count <comment="High bit clear = Literal run length">;
+    if (Count > 0) ubyte Data[Count];
+} RLE_LITERAL <read=Str("Literal | Count: %u", this.Count)>;
+
+typedef struct {
+    ubyte CTRL  <comment="High bit set = Repeat run">;
+    ubyte Value <comment="Byte to be repeated (CTRL & 0x7F) times">;
+} RLE_REPEAT <read=Str("Repeat | Count: %u | Value: 0x%02X", this.CTRL & 0x7F, this.Value)>;
+
+//-----------------------------------------------------------------------------------------
+
+struct {
+    RLE_HEADER Header;
+
+    local int64 currentPosition <hidden=true> = FTell();
+    local uint  outBytes        <hidden=true> = 0;
+    local uint  literalCount    <hidden=true> = 0, repeatCount <hidden=true> = 0;
+    local uint  literalData     <hidden=true> = 0, repeatData  <hidden=true> = 0; // Output bytes per class
+    local ubyte CTRL            <hidden=true>;
+
+    struct {
+        while (FTell() < FileSize()) {
+            CTRL = ReadUByte(FTell());
+            if ((CTRL & 0x80) == 0) { RLE_LITERAL Literal; outBytes +=  CTRL;         literalCount++; literalData +=  CTRL;         }
+            else                    { RLE_REPEAT  Repeat;  outBytes += (CTRL & 0x7F);  repeatCount++;  repeatData += (CTRL & 0x7F); }
+        }
+    } Data;
+
+    Printf("=====================================================================\n");
+    Printf(" Daredevil RLE Container\n");
+    Printf("   Compressed File Size    : %Lu bytes\n", FileSize());
+    Printf("   Header-Decoded File Size: %u bytes\n",  Header.uncompressedSize);
+    Printf("   Computed-Decoded File Size: %u bytes  -> %s\n", outBytes, (outBytes == Header.uncompressedSize) ? "MATCH" : "*** MISMATCH ***");
+    Printf("   Literal Runs: %u  (%u out bytes)\n", literalCount, literalData);
+    Printf("   Repeat Runs: %u  (%u out bytes)\n", repeatCount,  repeatData);
+    Printf("   Expansion Ratio: %.3fx\n", (double)Header.uncompressedSize / (double)FileSize());
+    Printf("=====================================================================\n");
+
+    if (outBytes != Header.uncompressedSize) Warning("RLE decode size mismatch - grammar/offset error or corrupt file.");
+} RLE <name="Daredevil: Man Without Fear .RLE Compressed Archive">;
+
+//-----------------------------------------------------------------------------------------

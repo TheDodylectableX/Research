@@ -12,7 +12,7 @@
 //---------------------------------------------------------------------------------------
 
 typedef struct {
-    float Version; // Why a float???? Bruh
+    float  Version; // Why a float???? Bruh
     ushort fileCount <name="File Count">;
     ushort Unknown   <format=hex>;
 } GMX_HEADER <read=Str("GMX Version %f | %u Files", this.Version, this.fileCount)>;

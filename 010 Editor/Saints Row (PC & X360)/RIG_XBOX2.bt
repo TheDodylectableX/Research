@@ -1,0 +1,93 @@
+//--------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: RIG_XBOX2.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Saints Row's character rigs
+//  Category: Armatures / Skeletons
+// File Mask: *.rig_xbox2
+//  ID Bytes: 00 00 00 04
+//   History: 
+//--------------------------------------------------------------
+
+BigEndian();
+#include "../Common.bt"
+local int64 headerOffset    <hidden=true> = 32;
+local int64 nameTableOffset <hidden=true> = 0;
+
+string RigName(uint nameOffset) {
+    if (nameTableOffset == 0) return "";
+    return ReadString(nameTableOffset + nameOffset);
+}
+
+//--------------------------------------------------------------
+
+typedef struct {
+    uint Sentinel   <name="Sentinel", format=hex, comment="0xFFFFFFFF record marker">;
+    uint nameOffset <name="Name Offset", comment="Relative, into the name table">;
+    VEC4F Rotation  <name="Quaternion">;
+    VEC3F Position  <name="Position">;
+} BoneTransform <read=Str("%s | Position (%.3f, %.3f, %.3f)", RigName(this.nameOffset), this.Position.X, this.Position.Y, this.Position.Z)>;
+
+typedef struct {
+    uint  Sentinel     <name="Sentinel", comment="0xFFFFFFFF record marker", format=hex>;
+    uint  nameOffset   <name="Name Offset", comment="Into the name table">;
+    VEC3F Rotation[3]  <name="Rotation">;
+    VEC3F Translation  <name="Translation">;
+    uint  parentRef    <name="Parent Reference", comment="Small index (parent bone?); varies per bone, NOT padding">;
+} BoneMatrix <read=Str("%s | Translation (%.3f, %.3f, %.3f)", RigName(this.nameOffset), this.Translation.X, this.Translation.Y, this.Translation.Z)>;
+
+typedef struct { string boneName; } NameEntry <read=this.boneName>;
+
+//--------------------------------------------------------------
+
+typedef struct {
+    uint Version;
+    uint boneCount   <name="Bone Count", comment="Skeleton bones; matches the cmesh bone-remap palette size">;
+    uint Unknown2    <comment="Sums with Unknown3 towards boneCount">;
+    uint Unknown3    <comment="Sums with Unknown2 towards boneCount">;
+    uint helperCount <name="Helper Bone Count", comment="Cloth/hair/pose helper bones (60-byte matrix records)">;
+    FSkip(12); // Reserved
+} RigHeader <read=Str("%u Bones | %u Helpers", this.boneCount, this.helperCount)>;
+
+//--------------------------------------------------------------
+
+struct {
+    FSeek(headerOffset);
+    RigHeader header <name="Header">;
+
+    //--- Locate the trailing name table (run of printable/zero bytes at EOF)
+    local int64 scan <hidden=true> = FileSize() - 1;
+    local ubyte b <hidden=true> = 0;
+    while (scan > headerOffset) {
+        b = ReadUByte(scan);
+        if (b == 0x00 || (b >= 0x20 && b < 0x7F)) scan--; else break;
+    }
+    nameTableOffset = scan + 1;
+    local int64 nameBytes <hidden=true> = FileSize() - nameTableOffset;
+
+    //--- Auxiliary block: header end -> first valid transform sentinel
+    // A valid transform is 0xFFFFFFFF followed by a name offset within the table.
+    local int64 firstRec <hidden=true> = FTell();
+    while (firstRec < nameTableOffset - 8 && !(ReadUInt(firstRec) == 0xFFFFFFFF && ReadUInt(firstRec + 4) < nameBytes)) firstRec += 4;
+    if (firstRec > FTell()) byte auxBlock[firstRec - FTell()] <name="Auxiliary Block", comment="Purpose TBD; verify across more rigs">;
+
+    //--- Local transforms (boneCount - 1 records of 36 bytes)
+    // The root bone is omitted here (it is the origin) so the local-transform block holds boneCount - 1 records. Each is 0xFFFFFFFF-led.
+    FSeek(firstRec);
+    local int transformCount <hidden=true> = header.boneCount - 1;
+    if (transformCount > 0) BoneTransform localTransforms[transformCount] <name="Local Transforms", optimize=false>;
+
+    //--- Bind matrices (helperCount records of 60 bytes)
+    if (header.helperCount > 0) BoneMatrix bindMatrices[header.helperCount] <name="Bind Matrices", optimize=false>;
+
+    //--- Name table (boneCount + helperCount null-terminated names)
+    FSeek(nameTableOffset);
+    local int nameCount <hidden=true> = 0;
+    local int64 np <hidden=true> = nameTableOffset;
+    while (np < FileSize()) { if (ReadUByte(np) == 0x00) nameCount++; np++; }
+    if (nameCount > 0) NameEntry boneNames[nameCount] <name="Bone Names", bgcolor=0xCC99FF, optimize=false>;
+} RIG <name="Volition Saints Row .RIG_XBOX2 Skeleton">;
+
+//--------------------------------------------------------------

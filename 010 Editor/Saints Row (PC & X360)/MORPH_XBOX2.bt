@@ -1,0 +1,133 @@
+//------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: MORPH_XBOX2.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Saints Row's facial morph targets
+//  Category: Models: Morph Target Data
+// File Mask: *.morph_xbox2
+//  ID Bytes: 13 37 BE EF
+//   History: 
+//------------------------------------------------------------------
+
+// LAYOUT
+//   [0x00]  Header (0x30 bytes)
+//   [0x30]  Morph Set 0: descriptor table + sparse delta blocks
+//   [...]   Morph Set 1: same morphs at a different mesh LOD
+//   [...]   Vertex Index Table: trailing uint32 list of affected mesh vertices
+//
+// MORPH SETS
+//   The file stores the SAME morph list twice (identical name hashes), once per
+//   mesh LOD. setCount (header +0x18) = 2 on the sample. Each set is a descriptor
+//   table of morphCount records (header +0x08), each pointing via an ABSOLUTE
+//   file offset to that morph's sparse per-vertex delta block.
+//
+// DELTAS ARE SPARSE
+//   Each morph only lists the vertices it actually moves (vertex indices are not
+//   contiguous), which is ideal for facial expressions touching a subset of verts.
+//
+// OPEN QUESTIONS (need a second file / the importer to confirm)
+//   * Morphs are identified by a 32-bit name HASH, not a string. Mapping hashes
+//     back to names ("smile", "blink_l", ...) needs the hash algorithm or a table.
+//   * Position deltas are int16; the 6 floats in each descriptor look like an AABB
+//     (min/max Vec3) used to dequantize them:
+//       delta = boundsMin + (rawInt16 / 32767) * (boundsMax - boundsMin)
+//     Verify the exact scale when applying morphs in the importer.
+//------------------------------------------------------------------
+
+BigEndian();
+#include "../Common.bt"
+
+local int   i                     <hidden=true>;
+local uint  morphCount            <hidden=true> = 0; // Morphs per set (header +0x08)
+local uint  morphSetCount         <hidden=true> = 0; // Number of sets / LODs (header +0x18)
+local int64 indexTableOffset      <hidden=true> = 0; // Trailing vertex index table
+local int   currentMorph          <hidden=true> = 0; // Working index while emitting deltas
+local int64 morphDataOffset[256]  <hidden=true>;     // Per-morph absolute delta offset
+local int   morphVertexCount[256] <hidden=true>;
+
+//------------------------------------------------------------------
+
+// One sparse morph delta (16 bytes): position delta, vertex index, packed normal.
+typedef struct {
+    VEC3SS positionDelta <name="Position Delta", comment="Dequantize using the descriptor's min/max bounds">;
+    ushort vertexIndex   <name="Vertex Index",   comment="Index into the mesh vertex buffer">;
+    uint   normalDelta   <name="Normal Delta",   comment="Packed 10-10-10-2", format=hex>;
+    FSkip(4); // Reserved
+} MorphDelta <read=Str("Vertex %u | Delta (%d, %d, %d)", this.vertexIndex, this.positionDelta.X, this.positionDelta.Y, this.positionDelta.Z)>;
+
+// Morph descriptor (48 bytes): hash, vertex count, delta AABB, epsilon, data offset.
+typedef struct {
+    uint  nameHash    <name="Name Hash", format=hex>;
+    uint  vertexCount <name="Vertex Count", comment="Sparse deltas in this morph's block">;
+    VEC3F boundsMin   <name="Delta Bounds Min">;
+    VEC3F boundsMax   <name="Delta Bounds Max">;
+    VEC3F Epsilon     <comment="Constant ~0.0001 x3">;
+    uint  dataOffset  <name="Data Offset",  comment="Offset to the delta block, Absolute">;
+
+    // Capture for the delta-block pass below.
+    morphDataOffset[currentMorph]  = dataOffset;
+    morphVertexCount[currentMorph] = vertexCount;
+    currentMorph++;
+} MorphDescriptor <read=Str("Hash: 0x%08X | %u Vertices at %u", this.nameHash, this.vertexCount, this.dataOffset)>;
+
+// The sparse delta block is emitted per-morph in MorphSet below (seek-driven).
+
+// One morph set: descriptor table followed by all its delta blocks.
+typedef struct {
+    MorphDescriptor descriptors[morphCount] <name="Descriptors", optimize=false>;
+
+    // Emit each delta block (seek-driven; located by absolute offsets).
+    for (i = 0; i < morphCount; i++) {
+        FSeek(morphDataOffset[i]);
+        MorphDelta deltas[morphVertexCount[i]] <name="Morph Deltas", optimize=false>;
+    }
+} MorphSet <name="Morph Set">;
+
+//------------------------------------------------------------------
+
+typedef struct {
+    uint Magic                <format=hex>;
+    uint Version;
+    uint morphCount           <name="Morph Count", comment="Morphs per set">;
+    uint Unknown2             <format=hex>;
+    uint Unknown3             <format=hex>;
+    uint morphCount_Secondary <name="Morph Count (Secondary)", comment="Matches Morph Count">;
+    uint setCount             <name="Morph Set Count",         comment="Morph sets / mesh LODs">;
+    uint tableOffset          <name="Descriptor Table Offset", comment="Where the first morph set starts (0x30)">;
+    uint set1Offset           <name="Set 1 Offset",            comment="Where the secondary morph set starts, Absolute">;
+    uint indexOffset          <name="Index Table Offset",      comment="Where the vertex index table starts, Absolute">;
+    ushort modelVertexCount   <name="Model Vertex Count",      comment="Corresponds to the first LOD">;
+    ubyte Unknown4[6];
+} MorphHeader <read=Str("0x%08X | %u Morphs | %u Sets", this.Magic, this.morphCount, this.setCount)>;
+
+//------------------------------------------------------------------
+
+struct {
+    MorphHeader header <name="Header">;
+    morphCount       = header.morphCount;
+    morphSetCount    = header.setCount;
+    indexTableOffset = header.indexOffset;
+
+    //--- Morph set 0 for the first LOD starts right after the header at tableOffset
+    FSeek(header.tableOffset);
+    currentMorph = 0;
+    MorphSet Set0 <name="Morph Set 0 (LOD0)">;
+
+    //--- Morph set 1 for the second LOD if present
+    if (header.setCount > 1 && header.set1Offset > 0 && header.set1Offset < FileSize()) {
+        FSeek(header.set1Offset);
+        currentMorph = 0;
+        MorphSet Set1 <name="Morph Set 1 (LOD1)">;
+    }
+
+    //--- Trailing vertex index table (affected mesh vertices)
+    if (header.indexOffset > 0 && header.indexOffset < FileSize()) {
+        FSeek(header.indexOffset);
+        local int indexCount <hidden=true> = (FileSize() - header.indexOffset) / 4;
+        uint vertexIndexTable[indexCount] <name="Vertex Index Table", comment="Mesh vertex indices touched by morphs", bgcolor=0xCC99FF>;
+    }
+} MORPH <name="Volition Saints Row .MORPH_XBOX2 Facial Morph Targets">;
+
+//--------------------------------------------------------------

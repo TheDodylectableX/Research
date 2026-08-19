@@ -1,0 +1,258 @@
+//---------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: TEX.bt
+//   Authors: Dodylectable, turfster (Initial Research)
+//   Version: 2.3
+//   Purpose: Reverse engineering Terminal Reality's Infernal Engine textures
+//  Category: Textures
+// File Mask: *.TEX
+//  ID Bytes: 02 00 00 00 | 03 00 00 00 | 04 00 00 00
+//   History:
+//     2.3 - Naming/platform corrections (no byte-layout change — decode unchanged).
+//           * CHANNEL ORDER CLARIFIED: the 32-bit format is D3D A8R8G8B8, which
+//             tools (Kuriimu2) and DirectX call "ARGB32 / ARGB8888". On disk,
+//             little-endian, that is byte order B,G,R,A — verified empirically:
+//             alpha is the constant-0xff byte at position 3 (last), and saturated
+//             red pixels peak at byte 2. So "ARGB32" (packed name) == BGRA
+//             (on-disk bytes); both descriptions agree. Structs already read
+//             B,G,R,A correctly; comments now state the A8R8G8B8/ARGB equivalence.
+//           * PLATFORM: Aeon Flux shipped on Xbox/PS2 only (no PC build); samples
+//             here are from the Xbox version, whose Infernal Engine formats track
+//             the BR1/BR2 PC ports closely. Accordingly, formats 13/14 ARE the
+//             Xbox swizzled paletted formats the original research named — that
+//             label was correct; the v2.2 note retracting it was wrong. The
+//             Morton index order on 13/14 is standard Xbox texture swizzling, and
+//             fmt 12 (DXT5) is Xbox-supported block compression.
+//           * RLE (10), DXT1/DXT3, raw8 (2): still no samples found — left as
+//             UNCONFIRMED best-effort, per Dody ("whatever for now").
+//     2.2 - Cracked AF formats 13/14: 8bpp + 1024B BGRA front palette, Z-order
+//           (Morton) swizzled indices. (Platform framing corrected in 2.3.)
+//     2.1 - Palette-location fix (BR1 P8 palette at FRONT, R,G,B), mip count at
+//           offset 0x14 (= levels-1), BR2 0x1C constant 0x0019D318.
+//     2.0 - Major revamp: corrected format enum (1=P8, 3=ARGB32, 12=DXT5),
+//           confirmed DXT5 in Aeon Flux, format-driven decode, header sizing.
+//     1.0 - Initial release
+//---------------------------------------------------------------------------
+//
+// PLATFORM NOTE
+//   BloodRayne 1/2 samples are PC ports; Aeon Flux samples are the Xbox build.
+//   The Xbox build's Infernal Engine texture formats line up with the PC ports
+//   except where the Xbox GPU dictates: textures may be SWIZZLED (Morton order),
+//   which is what formats 13/14 use.
+//
+// CONFIRMED FORMAT MAP (11 samples)
+//   Game  Ver  Fmt  Hdr  Pixel layout
+//   ----  ---  ---  ---  -----------------------------------------------------------
+//   BR1    2    1   24   [768B RGB palette][8bpp index mip chain]            (linear)
+//   BR2    3    3   32   A8R8G8B8 ("ARGB32") mip chain; on disk B,G,R,A      (linear)
+//   AF*    4   12   32   DXT5 mip chain (16B blocks: 8B alpha + 8B color)   (Xbox)
+//   AF*    4   13   32   [1024B BGRA palette][8bpp indices]  XBOX-SWIZZLED
+//   AF*    4   14   32   [1024B BGRA palette][8bpp indices]  XBOX-SWIZZLED
+//   (* Aeon Flux = Xbox build.)
+//
+// HEADER FIELD MAP
+//   0x00 version     0x08 width      0x10 unknownA (0; ==8 in some AF) 0x18 unknownB(0)
+//   0x04 format      0x0C height     0x14 mipLevels (levels-1)   0x1C tail*
+//   * 0x1C: BR2 -> const 0x0019D318;  AF -> 0.  (BR1 header ends at 0x18.)
+//
+// CHANNEL ORDER (all 32-bit pixels and all 4-byte palette entries)
+//   D3D A8R8G8B8, a.k.a. "ARGB32 / ARGB8888" (Kuriimu/DirectX packed name).
+//   Little-endian on-disk byte order is B, G, R, A. Alpha is the LAST byte.
+//
+// STILL UNCONFIRMED (no sample yet — decoders are best-effort + warn):
+//   Format 2 (raw8), 10 (RLE), and DXT1/DXT3. Exact 13-vs-14 distinction.
+//
+//---------------------------------------------------------------------------
+// SWIZZLE NOTE (formats 13 & 14 — Xbox swizzling) — for the exporter:
+//   Indices are stored in Morton / Z-order. For a square, power-of-two texture
+//   of side S, the linear on-disk position i maps to image (x,y) by de-interleaving
+//   bits: x gets i's even bits, y gets i's odd bits.
+//
+//     for (i = 0; i < S*S; i++) {
+//         x = 0; y = 0;
+//         for (b = 0; b < log2(S); b++) {
+//             x |= ((i >> (2*b))   & 1) << b;
+//             y |= ((i >> (2*b+1)) & 1) << b;
+//         }
+//         image[y][x] = swizzled[i];   // then look up palette[image[y][x]]
+//     }
+//
+//   Palette entries are A8R8G8B8 -> on-disk bytes B,G,R,A. (NPOT/non-square
+//   swizzle is untested.)
+//---------------------------------------------------------------------------
+
+LittleEndian();
+
+//---------------------------------------------------------------------------
+// Engine versions. 2/3/4 confirmed against real assets.
+//---------------------------------------------------------------------------
+typedef enum <uint> {
+    BLOODRAYNE    = 2,
+    BLOODRAYNE_2  = 3,
+    AEON_FLUX     = 4,
+    VERSION_6     = 6, // Forgot where this was on
+    // GHOSTBUSTERS = ????
+} VERSION;
+
+//---------------------------------------------------------------------------
+// Pixel format. CONFIRMED: 1, 3, 12, 13, 14. Others retained from prior
+// research and flagged UNCONFIRMED until a real sample lands.
+//---------------------------------------------------------------------------
+typedef enum <uint> {
+    FMT_P8_INDEXED   = 1,   // CONFIRMED (BR1): 8bpp + FRONT 768B RGB palette, linear
+    FMT_RAW8         = 2,   // UNCONFIRMED: Prior research "raw" 8bpp
+    FMT_ARGB32       = 3,   // CONFIRMED (BR2): A8R8G8B8 / "ARGB32"; On disk B,G,R,A
+    FMT_RLE_BR1      = 10,  // UNCONFIRMED: Prior research BR1 RLE byte stream
+    FMT_DXT5         = 12,  // CONFIRMED (AF/Xbox): DXT5 / BC3, 16-byte blocks
+    FMT_XBOX_PAL_13  = 13,  // CONFIRMED (AF/Xbox): 8bpp + 1024 bytes BGRA front palette, SWIZZLED
+    FMT_XBOX_PAL_14  = 14,  // CONFIRMED (AF/Xbox): same as 13; sample uses palette alpha
+    FMT_DXT1         = 100, // Placeholder so DXT1_BLOCK works (Not a real ID)
+    FMT_DXT3         = 101  // Placeholder so DXT3_BLOCK works (Not a real ID)
+} TEXTURE_FORMAT;
+
+//---------------------------------------------------------------------------
+// Compressed-block structs (010 cannot decompress; this lays out boundaries).
+// DXT1/BC1: 8B | DXT3.BC2: 16B | DXT5.BC3: 16B (AF/Xbox uses DXT5)
+//---------------------------------------------------------------------------
+typedef struct {
+    ushort Color0 <format=hex>, Color1 <format=hex>;
+    uint   colorIndices <comment="16 x 2-bit color selectors", format=hex>;
+} DXT1_BLOCK;
+
+typedef struct {
+    ubyte  Alpha[8] <comment="16 x explicit 4-bit alpha">;
+    ushort Color0 <format=hex>, Color1 <format=hex>;
+    uint   colorIndices <format=hex>;
+} DXT3_BLOCK;
+
+typedef struct {
+    ubyte  Alpha0, Alpha1;
+    ubyte  alphaIndices[6] <comment="16 x 3-bit interpolated-alpha selectors">;
+    ushort Color0 <comment="RGB565 endpoint 0", format=hex>;
+    ushort Color1 <comment="RGB565 endpoint 1", format=hex>;
+    uint   colorIndices <comment="16 x 2-bit color selectors", format=hex>;
+} DXT5_BLOCK;
+
+// Uncompressed pixel / palette structs.
+// Field order matches the on-disk little-endian byte order of A8R8G8B8 ("ARGB32").
+typedef struct { ubyte B, G, R, A; } PIXEL_ARGB32;     // CONFIRMED (BR2 32bpp): disk = B,G,R,A
+typedef struct { ubyte B, G, R;    } PIXEL_BGR;        // 24bpp (not seen; provided)
+typedef struct { ubyte R, G, B;    } PAL_ENTRY;        // CONFIRMED (BR1 768B palette): R,G,B
+typedef struct { ubyte B, G, R, A; } PAL_ENTRY_ARGB32; // CONFIRMED (AF 1024B palette): disk = B,G,R,A
+
+//---------------------------------------------------------------------------
+// Per-level byte size. Block formats round up to whole 4x4 blocks. 8bpp paletted
+// formats (1/2/13/14) are one byte per texel per level.
+//---------------------------------------------------------------------------
+int LevelBytes(int fmt, int w, int h) {
+    local int bW = (w + 3) / 4;
+    local int bH = (h + 3) / 4;
+    if (fmt == FMT_DXT5 || fmt == FMT_DXT3) return bW * bH * 16;
+    if (fmt == FMT_DXT1)                    return bW * bH * 8;
+    if (fmt == FMT_ARGB32)                  return w  * h  * 4;
+    if (fmt == FMT_P8_INDEXED || fmt == FMT_RAW8 || fmt == FMT_XBOX_PAL_13 || fmt == FMT_XBOX_PAL_14) return w * h;
+    return 0; // Unknown; Caller stops the loop and dumps a remainder.
+}
+
+// Front-palette size in bytes for a given format (0 if no front palette).
+int PaletteBytes(int fmt) {
+    if (fmt == FMT_P8_INDEXED) return 768;                             // 256 x RGB
+    if (fmt == FMT_XBOX_PAL_13 || fmt == FMT_XBOX_PAL_14) return 1024; // 256 x A8R8G8B8
+    return 0;
+}
+
+//---------------------------------------------------------------------------
+// HEADER. Same six leading uints for every version; v3/v4 carry two extra.
+//---------------------------------------------------------------------------
+struct TEX_HEADER {
+    VERSION        Version;
+    TEXTURE_FORMAT Format;
+    uint Width;
+    uint Height;
+    uint unknownA     <comment="0 in BR1/BR2; ==8 in some AF files.", format=hex>;
+    uint mipLevels    <comment="Total mip levels = This count + 1.">;
+
+    if (Version != BLOODRAYNE) {
+        uint unknownB <comment="0 in all BR2/AF samples.", format=hex>;
+        uint Tail     <comment="BR2: constant 0x0019D318. AF: 0.", format=hex>;
+    }
+} Header <bgcolor=cLtGray>;
+
+if (Header.Width == 0 || Header.Height == 0) Warning("TEX: zero dimension (%dx%d) — header may be misread.", Header.Width, Header.Height);
+
+//---------------------------------------------------------------------------
+// PIXEL DATA
+//
+// Header size is fixed by version. Paletted formats put the palette at the FRONT
+// (RGB for BR1 fmt 1; A8R8G8B8 for AF fmt 13/14), before the index mip chain.
+// Other formats start their mip chain immediately. Level count comes from the
+// header (mipLevels + 1); every level read is guarded against EOF overrun.
+//
+// For fmt 13/14 the indices are Xbox-swizzled (Z-order) on disk and are read here
+// in their stored order. See the SWIZZLE NOTE for the de-swizzle the exporter
+// must apply before palette lookup.
+//---------------------------------------------------------------------------
+local int dataStart <hidden=true> = (Header.Version == BLOODRAYNE) ? 24 : 32;
+local int numLevels <hidden=true> = Header.mipLevels + 1;
+local int palBytes  <hidden=true> = PaletteBytes(Header.Format);
+FSeek(dataStart);
+
+// FRONT palette (shared across all mip levels).
+if (palBytes > 0) {
+    if (FileSize() - FTell() >= palBytes + Header.Width * Header.Height) {
+        if (palBytes == 768) PAL_ENTRY Palette[256] <bgcolor=cLtPurple, comment="256-color RGB palette (front)">;
+        else PAL_ENTRY_ARGB32 Palette[256] <bgcolor=cLtPurple, comment="256-color A8R8G8B8 palette (front); disk B,G,R,A">;
+    } else Warning("TEX: paletted file too small for a front palette + base level. Layout unexpected.");
+}
+
+// Mip chain.
+local int lW <hidden=true> = Header.Width;
+local int lH <hidden=true> = Header.Height;
+local int lV <hidden=true>;
+local int levelSize <hidden=true>;
+
+for (lV = 0; lV < numLevels; lV++) {
+    levelSize = LevelBytes(Header.Format, lW, lH);
+
+    if (levelSize <= 0) {
+        Warning("TEX: format %d has no decoder; dumping remainder as raw bytes.", Header.Format);
+        break;
+    }
+    if (FTell() + levelSize > FileSize()) { // guard: never over-read
+        Warning("TEX: mip level %d (%dx%d) exceeds file bounds — stopping. Header mip count may be wrong.", lV, lW, lH);
+        break;
+    }
+
+    struct MIP {
+        local int w <hidden=true> = lW;   // visible per-level dimensions for inspection
+        local int h <hidden=true> = lH;
+        if (Header.Format == FMT_DXT5)        DXT5_BLOCK Blocks[((lW+3)/4) * ((lH+3)/4)] <bgcolor=cLtBlue>;
+        else if (Header.Format == FMT_DXT3)   DXT3_BLOCK Blocks[((lW+3)/4) * ((lH+3)/4)] <bgcolor=cLtBlue>;
+        else if (Header.Format == FMT_DXT1)   DXT1_BLOCK Blocks[((lW+3)/4) * ((lH+3)/4)] <bgcolor=cLtBlue>;
+        else if (Header.Format == FMT_ARGB32) PIXEL_ARGB32 Pixels[lW * lH] <bgcolor=cYellow>;
+        else if (Header.Format == FMT_XBOX_PAL_13 || Header.Format == FMT_XBOX_PAL_14) ubyte SwizzledIndex[lW * lH] <bgcolor=cYellow, comment="Xbox Z-order swizzled palette indices, De-swizzle before display (See SWIZZLE NOTE)">;
+        else if (Header.Format == FMT_P8_INDEXED  || Header.Format == FMT_RAW8)        ubyte ColorIndex[lW * lH] <bgcolor=cYellow, comment="Linear palette indices (See front Palette)">;
+    } Mip <bgcolor=cDkYellow, comment="Mip level (level 0 = full resolution)">;
+
+    if (lW == 1 && lH == 1) break;
+    lW = (lW > 1) ? (lW >> 1) : 1;
+    lH = (lH > 1) ? (lH >> 1) : 1;
+}
+
+//---------------------------------------------------------------------------
+// Trailing bytes (should be none on a clean parse).
+//---------------------------------------------------------------------------
+if (FTell() < FileSize()) {
+    byte EOFRemainder[FileSize() - FTell()] <bgcolor=cBlack, name="EOF Remainder (unconsumed)">;
+    Warning("TEX: %Ld trailing byte(s) unaccounted — format/layout needs review.", FileSize() - FTell());
+}
+
+//---------------------------------------------------------------------------
+// SAMPLES THAT WOULD CLOSE THE REMAINING GAPS
+//   * A BR1 RLE texture (format 10) to validate that decoder.
+//   * An Aeon Flux DXT1 texture (1-bit/no alpha) to confirm the 8-byte path.
+//   * A MIPPED fmt 13/14 to confirm swizzle + mip interaction.
+//   * Any clue tying header offset 0x10 (unknownA: 0 vs 8 in AF) to behaviour,
+//     and the exact 13-vs-14 distinction.
+//---------------------------------------------------------------------------

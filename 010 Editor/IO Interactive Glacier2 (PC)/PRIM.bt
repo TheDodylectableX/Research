@@ -1,0 +1,809 @@
+//----------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: PRIM.bt
+//   Authors: Dodylectable, Glacier 2 Modding Community
+//   Version: 1.0
+//   Purpose: Reverse engineering IO Interactive's Glacier 2 RenderPrimitive models
+//  Category: Models
+// File Mask: *.PRIM
+//  ID Bytes: 
+//   History: 
+//----------------------------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+
+//--------------------------------------------------
+// GAME DETECTION: Set this manually before parsing!
+//--------------------------------------------------
+//   "ABSOLUTION": Hitman Absolution
+//   "TRILOGY"   : Hitman World of Assassination
+//   "007FL"     : 007 First Light
+//--------------------------------------------------
+const string Game <hidden=true> = "007FL";
+
+//--------------
+// Enumerations
+//--------------
+typedef enum <ushort> {
+    UNKNOWN       = 0,
+    OBJECT_HEADER = 1,
+    MESH          = 2,
+    DECAL         = 3,
+    SPRITES       = 4,
+    SHAPE         = 5,
+    UNUSED        = 6
+} PRIM_OBJECT_TYPE;
+
+typedef enum <ubyte> {
+    STANDARD       = 0,
+    LINKED         = 1,
+    WEIGHTED       = 2,
+    STANDARD_UV_2  = 3,
+    STANDARD_UV_3  = 4,
+    STANDARD_UV_4  = 5
+} PRIM_OBJECT_SUBTYPE;
+
+//--------------------------------------------------------------------
+// Bitfield Flags
+// 010 Editor reads bitfields LSB-first within each storage unit (LE)
+// S the first declared field corresponds to bit 0.
+//--------------------------------------------------------------------
+
+// Global property flags carried by PRIM_OBJECT_HEADER (32-bit)
+typedef struct {
+    uint hasBones          : 1;  // Bit 0
+    uint hasFrames         : 1;  // Bit 1
+    uint isLinkedObject    : 1;  // Bit 2
+    uint isWeightedObject  : 1;  // Bit 3
+    uint reservedBits_A    : 4;  // Bits 4-7
+    uint useBounds         : 1;  // Bit 8
+    uint hasHighResolution : 1;  // Bit 9
+    uint reservedBits_B    : 22; // Bits 10-31
+} PRIM_OBJECT_HEADER_FLAGS <read=ReadObjectHeaderFlags>;
+
+string ReadObjectHeaderFlags(PRIM_OBJECT_HEADER_FLAGS &f) {
+    string s = "";
+    if (f.hasBones)          s += "Bones | ";
+    if (f.hasFrames)         s += "Frames | ";
+    if (f.isLinkedObject)    s += "Linked | ";
+    if (f.isWeightedObject)  s += "Weighted | ";
+    if (f.useBounds)         s += "Use Bounds | ";
+    if (f.hasHighResolution) s += "High Resolution | ";
+    if (s == "") s = "(None)";
+    return s;
+}
+
+// Per-mesh property flags carried by PRIM_OBJECT (8-bit)
+typedef struct {
+    ubyte isXAxisLocked    : 1; // Bit 0
+    ubyte isYAxisLocked    : 1; // Bit 1
+    ubyte isZAxisLocked    : 1; // Bit 2
+    ubyte isHighResolution : 1; // Bit 3
+    ubyte hasPS3Edge       : 1; // Bit 4
+    ubyte useColor1        : 1; // Bit 5
+    ubyte hasNoPhysicsProp : 1; // Bit 6
+    ubyte reservedBit      : 1; // Bit 7
+} PRIM_OBJECT_FLAGS <read=ReadObjectFlags>;
+
+string ReadObjectFlags(PRIM_OBJECT_FLAGS &f) {
+    string s = "";
+    if (f.isXAxisLocked)    s += "X Axis Locked | ";
+    if (f.isYAxisLocked)    s += "Y Axis Locked | ";
+    if (f.isZAxisLocked)    s += "Z Axis Locked | ";
+    if (f.isHighResolution) s += "High Resolution | ";
+    if (f.hasPS3Edge)       s += "PS3 Edge | ";
+    if (f.useColor1)        s += "Color1 | ";
+    if (f.hasNoPhysicsProp) s += "No Physics | ";
+    if (s == "") s = "(None)";
+    return s;
+}
+
+// Cloth identifier bitfield. Only one named bit so far; Everything else is reserved.
+// Sample 007FL files carry value 0x10000 (bit 16 set) for non-cloth meshes
+// So bit 16 is at minimum used as a "Valid cloth ID" marker; Leaving it under reservedBits_High for now.
+typedef struct {
+    uint reservedBits_Low  : 7;  // Bits 0-6
+    uint isSmoll           : 1;  // Bit 7
+    uint reservedBits_High : 24; // Bits 8-31
+} PRIM_CLOTH_ID <read=Str("isSmoll: %u", this.isSmoll)>;
+
+//----------------------------------------------------------------------------------
+
+//--------------------------------------------------------
+// Shared sub-headers (Identical layout across all games)
+//--------------------------------------------------------
+
+// The small per-object tag
+typedef struct {
+    ubyte            drawDestination;
+    ubyte            packType;
+    PRIM_OBJECT_TYPE Type;
+} PRIM_HEADER <read=Str("Type: %s", EnumToString(this.Type))>;
+
+// The per-object header used by both PrimMesh and PrimSubMesh
+typedef struct {
+    PRIM_HEADER         Header;
+    PRIM_OBJECT_SUBTYPE subType                  <name="Subtype">;
+    // The properties byte and the LOD-mask byte occupy +5/+6 but their order is swapped by game:
+    //   World of Assassination: +5 Properties, +6 LODMask
+    //   007 First Light       : +5 LODMask,    +6 Properties 
+    // LODMask is a per-LOD-level bitmask: (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, etc.) One bit per LOD
+    // (0xE0, 0xFF) meaning the mesh is shared across several LODs. The lowest set bit = The most detailed LOD the mesh participates in.
+    if (Game == "007FL") {
+        ubyte             LODMask <name="LOD Mask">;
+        PRIM_OBJECT_FLAGS Properties;
+    } else {
+        PRIM_OBJECT_FLAGS Properties;
+        ubyte             LODMask <name="LOD Mask">;
+    }
+    ubyte  variantID                <name="Variant ID">;
+    ubyte  ZBias                    <comment="Draws mesh in front of others">;
+    ubyte  ZOffset                  <comment="Moves mesh towards camera based on distance">;
+    ushort materialID               <name="Material ID">;
+    uint   wireColor                <name="Wire Color", format=hex>;
+    VEC4UB color1                   <comment="Used when useColor1 flag is set (only takes effect on submeshes)">;
+    VEC3F  objectBoundingBoxMinimum <name="Object Bounding Box Minimum">;
+    VEC3F  objectBoundingBoxMaximum <name="Object Bounding Box Maximum">;
+} PRIM_OBJECT <read=ReadPrimObject>;
+
+string ReadPrimObject(PRIM_OBJECT &o) {
+    string s;
+    SPrintf(s, "Subtype: %s | Material: %u", EnumToString(o.subType), o.materialID);
+    return s;
+}
+
+//-------------------------------------------------------------------
+// PRIM_OBJECT_HEADER: File footer referenced by the offset at start
+//-------------------------------------------------------------------
+typedef struct {
+    PRIM_HEADER              Header;
+    PRIM_OBJECT_HEADER_FLAGS Properties;
+
+    // 007FL inserts an extra 4-byte field here. Either 0xFFFFFFFF or 0x00000000.
+    // No idea what it is, Maybe the high 32 bits of a 64-bit bone-rig reference? (in which case boneRigResourceIndex below would be the low 32 bits).
+    if (Game == "007FL") uint unknownPadding_007FL <format=hex>;
+
+    uint  boneRigResourceIndex    <name="Bone Rig Resource Index", comment="0xFFFFFFFF: No embedded skeleton (BORG asset referenced externally by resource hash)", format=hex>;
+    uint  objectCount             <name="Object Count">;
+    uint  objectTableOffset       <name="Object Table Offset">;
+    VEC3F totalBoundingBoxMinimum <name="Total Bounding Box Minimum">;
+    VEC3F totalBoundingBoxMaximum <name="Total Bounding Box Maximum">;
+} PRIM_OBJECT_HEADER <name="Object Header", read=ReadPrimObjectHeader>;
+
+string ReadPrimObjectHeader(PRIM_OBJECT_HEADER &h) {
+    string s;
+    SPrintf(s, "%u Objects | Flags: %s", h.objectCount, ReadObjectHeaderFlags(h.Properties));
+    return s;
+}
+
+//----------------------------------------------------------------------------------
+
+//----------------------------------------------------------------------------------------------
+// Bone Data Structures
+//----------------------------------------------------------------------------------------------
+// IMPORTANT: BoneInfo.totalSize is the TOTAL allocated region size in bytes
+// And not just the parsed header+accelerator-entries size. The trailing region
+// (Usually filled with 0xFF in 007FL) is reserved padding that extends to the next data block.
+//----------------------------------------------------------------------------------------------
+typedef struct {
+    uint Offset;
+    uint indicesCount <comment="Number of bone indices for this acceleration entry">;
+} BONE_ACCEL <read=Str("Offset: 0x%X | Indices: %u", this.Offset, this.indicesCount)>;
+
+typedef struct {
+    local int64 startOffset <hidden=true> = FTell();
+
+    ushort totalSize       <name="Total Size", comment="Total allocated region size in bytes (includes reserved padding)">;
+    ushort accelEntryCount <name="Acceleration Entry Count">;
+    ubyte  boneRemap[255]  <name="Bone Remap Table", comment="Read as U16: Map primary (slot-0) bone index -> Accel Entry Index. | 0xFFFF: Unused. Empty on shared-rig assets and not used for joint decoding.">;
+    ubyte  alignmentPadding;
+    if (accelEntryCount > 0) {
+        if (Game == "007FL") {
+            // 007FL pins the accel block to the LAST accelEntryCount*8 bytes of the region; The middle is 0xFF padding, Hitman puts it right after the header.
+            // It's always: sum(AccelEntries.indicesCount) + 2 == BONE_INDICES.indexCount
+            local int64 accelStart <hidden=true> = startOffset + totalSize - (accelEntryCount * 8);
+            local int64 midGap <hidden=true> = accelStart - FTell();
+            if (midGap > 0) ubyte midReservedPadding[midGap] <hidden=true>;
+        }
+        BONE_ACCEL AccelEntries[accelEntryCount] <optimize=false>;
+    }
+
+    // Consume the rest of the BoneInfo region (trailing 0xFF padding) so that the next FSeek after BONE_INFO lands exactly where the data block ends and not in the middle of the reserved tail.
+    local int64 parsedBytes <hidden=true> = FTell() - startOffset;
+    local int64 tailBytes   <hidden=true> = totalSize - parsedBytes;
+    if (tailBytes > 0) ubyte reservedTailPadding[tailBytes] <hidden=true>;
+} BONE_INFO <read=Str("%u Acceleration Entries | %u bytes total", this.accelEntryCount, this.totalSize)>;
+
+// Count-prefixed bone index buffer. The index count counts TOTAL ushort slots including the two the count word itself occupies
+// (indexCount - 2) real ushort entries follow.
+//
+// CONTENT (007FL): Per-bone-batch VERTEX INDICES - The engine's runtime skinning batches.
+// The BONE_INFO accel entries partition this buffer one slice per primary bone; Each slice lists the vertices/triangle-corners that bone influences.
+// These aren't bone indices and play no role in decoding per-vertex joints (Which are global BORG indices; See skinning struct).
+typedef struct {
+    uint indexCount <name="Index Count", comment="Total ushort slots including the 2 the count word occupies: (indexCount - 2) entries follow">;
+    if (indexCount > 2) ushort BoneIndices[indexCount - 2] <comment="Per-bone-batch vertex indices (Runtime skinning batches) and not bone indices.", optimize=false>;
+} BONE_INDICES <read=Str("%u Bone Indices (first 2 packed into indexCount)", this.indexCount)>;
+
+//----------------------------------------------------------------------------------
+// ABSOLUTION boneIndices pool - a DIFFERENT count convention than WoA/007FL above (byte-verified
+// on shipping character models):
+//   u16 totalElementCount = TOTAL u16 element count of the buffer, SELF-INCLUSIVE
+//                           (the region ends exactly at bufferStart + 2 * totalElementCount).
+//   The remaining elements are, contiguously per BONE_INFO accel entry:
+//     u16 segmentCount    = accel.indicesCount + 1 (self-inclusive)
+//     u16 values[...]     = VERTEX indices (verified against per-vertex skinning influences)
+//   accel.offset is the ELEMENT index of the segment's first value; segments chain with exactly
+//   one count element between them. Runtime GPU bone-batching data - REGENERATE on export.
+typedef struct {
+    ushort totalElementCount <name="Total Element Count", comment="Self-inclusive u16 element count; region ends at start + 2*this">;
+    if (totalElementCount > 1)
+        ushort Elements[totalElementCount - 1] <comment="Interleaved per-segment counts + vertex-index values (see accel entries)", optimize=false>;
+} BONE_INDICES_ABSOLUTION <read=Str("%u u16 elements (self-inclusive count)", this.totalElementCount)>;
+
+// ABSOLUTION copyBones: pairs of u32. STRUCTURE confirmed; SEMANTICS open - both lanes are always
+// multiples of 12 in shipping samples, reading like (lengthBytes, offsetBytes) over a 12-byte-stride
+// target buffer whose identity is unconfirmed. Labelled honestly rather than guessed.
+typedef struct (uint pairCount) {
+    struct COPY_BONE_PAIR {
+        uint first  <name="First (unknown, multiple of 12)">;
+        uint second <name="Second (unknown, multiple of 12)">;
+    } Pairs[pairCount] <optimize=false>;
+} COPY_BONES_ABSOLUTION <read=Str("%u pairs", sizeof(this) / 8)>;
+
+//----------------------------------------------------------------------------------
+
+//--------------------------------------------------
+// BoxColi: Bullet/Projectile broad-phase collision
+//--------------------------------------------------
+typedef struct {
+    VEC3UB boxMinimum <comment="Quantized into the mesh's bounding box space">;
+    VEC3UB boxMaximum;
+} BOX_COLI_ENTRY <read=Str("Min: (%u,%u,%u) | Max: (%u,%u,%u)",
+                           this.boxMinimum.X, this.boxMinimum.Y, this.boxMinimum.Z,
+                           this.boxMaximum.X, this.boxMaximum.Y, this.boxMaximum.Z)>;
+
+typedef struct {
+    ushort         chunkCount          <name="Chunk Count">;
+    ushort         trianglesPerChunk   <name="Triangles Per Chunk", comment="Usually 0x20 (32)">;
+    BOX_COLI_ENTRY Entries[chunkCount] <optimize=false>;
+} BOX_COLI <read=Str("%u chunks x %u tris/chunk", this.chunkCount, this.trianglesPerChunk)>;
+
+//----------------------------------------------------------------------------------
+
+//-------------------
+// Face Index Buffer
+//-------------------
+typedef struct (uint indexCount) { if (indexCount > 0) VEC3US Triangles[indexCount / 3] <optimize=false>; } INDEX_BUFFER <read=Str("%u Triangles", sizeof(this) / 6)>;
+
+//----------------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------------------------------
+// HITMAN VERTEX BUFFER (Single packed stream per submesh)
+// Layout in order:
+//   1. Positions                vertexCount entries (interleaved per vertex)
+//   2. Weights & Joints/Indices vertexCount entries (only if isWeightedObject)
+//   3. Normal/Tangent/Bitangent & UVs                vertexCount entries (interleaved per vertex)
+//   4. Vertex Colors      - vertexCount entries (only when color gate passes)
+//---------------------------------------------------------------------------------------------------
+
+// Skinning record for a single weighted Hitman vertex: 12 bytes. Encodes up to 6 bone influences per vertex.
+// JOINT ENCODING (Hitman/WoA): Every joint byte is a DIRECT BORG bone index; No remapping required or is packed.
+// Unlike 007FL; Absolution and WoA rigs stay under 256 bones so ubyte suffices. The six weight bytes sum to 255.
+typedef struct {
+    ubyte weight_0_A, weight_0_B, weight_0_C, weight_0_D;
+    ubyte joint_0_A,  joint_0_B,  joint_0_C,  joint_0_D;
+    ubyte weight_1_A, weight_1_B, joint_1_A,  joint_1_B;
+} HITMAN_WEIGHTS_AND_JOINTS <read=Str("W: %u, %u, %u, %u, %u, %u | J: %u, %u, %u, %u, %u, %u",
+                                      this.weight_0_A, this.weight_0_B, this.weight_0_C, this.weight_0_D, this.weight_1_A, this.weight_1_B,
+                                      this.joint_0_A,  this.joint_0_B,  this.joint_0_C,  this.joint_0_D, this.joint_1_A,  this.joint_1_B)>;
+
+// ABSOLUTION Skinning Record: 8 bytes: 4 weights + 4 bone remap values.
+// boneRemapValues resolve to global bone indices via BoneInfo.boneRemap = GetBoneIndex(value/3).
+typedef struct {
+    ubyte weight_A, weight_B, weight_C, weight_D;
+    ubyte boneRemap_A, boneRemap_B, boneRemap_C, boneRemap_D;
+} ABSOLUTION_WEIGHTS_AND_REMAP <read=Str("W: %u, %u, %u, %u | Joint Remap: %u, %u, %u, %u",
+                                      this.weight_A, this.weight_B, this.weight_C, this.weight_D,
+                                      this.boneRemap_A, this.boneRemap_B, this.boneRemap_C, this.boneRemap_D)>;
+
+// Per-vertex NTB + UVs record. 12 bytes of NTB plus 4 bytes per UV channel.
+// UVChannelCount can be 1 -> 4 in Hitman (PRIM_OBJECT_SUBTYPE controls the variant: Standard, StandardUV2..4).
+typedef struct (uint UVChannelCount) {
+    VEC4SB Normal      <comment="Quantized signed byte normal (decode: x/127.5 - 1)">;
+    VEC4SB Tangent;
+    VEC4SB Bitangent;
+    if (UVChannelCount >= 1) VEC2SS UV1 <comment="Quantized by UVCoordScaleBias">;
+    if (UVChannelCount >= 2) VEC2SS UV2;
+    if (UVChannelCount >= 3) VEC2SS UV3;
+    if (UVChannelCount >= 4) VEC2SS UV4;
+} HITMAN_VERTEX_DATA;
+
+// ABSOLUTION per-vertex record (LINKED / WEIGHTED): Normal, Tangent, Binormal, UV*N, Color
+// All INLINE per vertex (color isn't a separate trailing array). 20 bytes at UVChannelCount = 1.
+typedef struct (uint UVChannelCount) {
+    VEC4UB Normal <comment="Decode (2X/255 - 1)">;
+    VEC4UB Tangent;
+    VEC4UB Binormal;
+    if (UVChannelCount >= 1) VEC2SS UV1 <comment="Quantized by UVCoordScale/Bias">;
+    if (UVChannelCount >= 2) VEC2SS UV2;
+    if (UVChannelCount >= 3) VEC2SS UV3;
+    if (UVChannelCount >= 4) VEC2SS UV4;
+    VEC4UB Color  <comment="RGBA, Linear Colorspace">;
+} ABSOLUTION_VERTEX_DATA <read=Str("Normal: (%u, %u, %u) | UV: (%d, %d) | Color: (%u, %u, %u, %u)",
+                                   this.Normal.X, this.Normal.Y, this.Normal.Z,
+                                   this.UV1.X, this.UV1.Y,
+                                   this.Color.X, this.Color.Y, this.Color.Z, this.Color.W)>;
+
+// ABSOLUTION STANDARD per-vertex record (interleaved with positions):
+// The color sits between Normal and Tangent. Positions are read alongside (see ABSOLUTION_VERTEX_BUFFER).
+typedef struct (uint UVChannelCount) {
+    VEC4SS Position    <comment="Quantized (Use vPosScale/Bias)">;
+    VEC4UB Normal      <comment="Decode (2X/255 - 1)">;
+    VEC4UB Color       <comment="RGBA, Linear Colrorspace">;
+    VEC4UB Tangent;
+    VEC4UB Binormal;
+    if (UVChannelCount >= 1) VEC2SS UV1;
+    if (UVChannelCount >= 2) VEC2SS UV2;
+    if (UVChannelCount >= 3) VEC2SS UV3;
+    if (UVChannelCount >= 4) VEC2SS UV4;
+} ABSOLUTION_STANDARD_VERTEX <read=Str("Normal: (%u, %u, %u) | Color: (%u, %u, %u, %u) | UV: (%d, %d)",
+                                   this.Normal.X, this.Normal.Y, this.Normal.Z,
+                                   this.Color.X, this.Color.Y, this.Color.Z, this.Color.W,
+                                   this.UV1.X, this.UV1.Y)>;
+
+// Stream-major collection of per-vertex NTB+UV records (interleaved per vertex).
+typedef struct (uint vertexCount, uint UVChannelCount) {
+    local uint j <hidden=true>;
+    for (j = 0; j < vertexCount; j++) HITMAN_VERTEX_DATA Vertex(UVChannelCount);
+} HITMAN_VERTEX_DATA_STREAM;
+
+// The full Hitman vertex buffer.
+typedef struct (uint vertexCount, uint UVChannelCount, uint isWeighted, uint isHighResolution, uint readColor) {
+    //----- 1. Positions -----
+    if (isHighResolution) VEC3F  Positions[vertexCount] <optimize=false, comment="High resolution float positions">;
+    else                  VEC4SS Positions[vertexCount] <optimize=false, comment="Quantized short positions (Use vertexPositionScale/Bias)">;
+
+    //----- 2. Skinning weights & joints (only when weighted) -----
+    if (isWeighted) HITMAN_WEIGHTS_AND_JOINTS WeightsAndJoints[vertexCount] <optimize=false>;
+
+    //----- 3. NTB + UVs (interleaved per vertex) -----
+    HITMAN_VERTEX_DATA_STREAM VertexData(vertexCount, UVChannelCount);
+
+    //----- 4. Vertex colors (only when color gate passes) -----
+    if (readColor) VEC4UB Colors[vertexCount] <optimize=false, comment="RGBA per-vertex color">;
+} HITMAN_VERTEX_BUFFER;
+
+// ABSOLUTION vertex buffer. subType drives the stream layout:
+//   STANDARD (0): Interleaved per vertex; Position, Normal, Color, Tangent, Binormal, UV*N
+//   LINKED   (1): Planar: All positions then per vertex Normal, Tangent, Binormal, UV*N, Color
+//   WEIGHTED (2): Planar: All positions then all (4 weights + 4 remap) then per vertex Normal, Tangent, Binormal, UV*N, Color
+typedef struct (uint vertexCount, uint UVChannelCount, uint subType) {
+    local uint k <hidden=true>;
+    if (subType == 0) { // STANDARD
+        for (k = 0; k < vertexCount; k++) ABSOLUTION_STANDARD_VERTEX VertexData(UVChannelCount);
+    } else { // LINKED / WEIGHTED
+        VEC4SS Positions[vertexCount] <optimize=false, comment="Quantized Positions">;
+        if (subType == 2) ABSOLUTION_WEIGHTS_AND_REMAP WeightsAndRemap[vertexCount] <optimize=false>;
+        for (k = 0; k < vertexCount; k++) ABSOLUTION_VERTEX_DATA VertexData(UVChannelCount);
+    }
+} ABSOLUTION_VERTEX_BUFFER;
+
+//----------------------------------------------------------------------------------
+
+//---------------------------------------------------------------------
+// Hitman PrimSubMesh: The old indirection layer that 007FL got rid of
+//---------------------------------------------------------------------
+typedef struct (uint isWeighted, uint parentIsHighResolution, uint parentUseColor1, uint subType) {
+    PRIM_OBJECT Object;
+
+    uint vertexCount          <name="Vertex Count">;
+    uint vertexBufferOffset   <name="Vertex Buffer Offset", comment="Absolute">;
+    uint indexCount           <name="Face Count">;
+    // Absolution doesn't have the additional index count variable
+    if (Game != "ABSOLUTION") uint additionalIndexCount <name="Additional Face Count", comment="Trailing indices appended after the main triangle list">;
+    uint indexBufferOffset    <name="Face Buffer Offset",    comment="Absolute">;
+    uint collisionOffset      <name="Collision Data Offset", comment="Absolute">;
+    uint clothOffset          <name="Cloth Data Offset",     comment="Absolute">;
+    uint UVChannelCount       <name="UV Channel Count",      comment="0 means 1 UV map is used">;
+
+    // Buffer Overlays: Follow this submesh's offsets to its actual data.
+    // Save the current file position so the parent's read sequence is restored once we're done jumping around.
+    local int64 savedPosition <hidden=true> = FTell();
+
+    // Index Buffer.
+    FSeek(indexBufferOffset);
+    if (Game == "ABSOLUTION") INDEX_BUFFER Indices(indexCount);
+    else                      INDEX_BUFFER Indices(indexCount + additionalIndexCount);
+
+    // Compute whether vertex colors are read.
+    local uint readColor <hidden=true> = ((!parentUseColor1) || isWeighted) && (!Object.Properties.useColor1);
+
+    FSeek(vertexBufferOffset);
+    if (Game == "ABSOLUTION") ABSOLUTION_VERTEX_BUFFER Vertices(vertexCount, effectiveUV, subType);
+    else                      HITMAN_VERTEX_BUFFER     Vertices(vertexCount, UVChannelCount, isWeighted, parentIsHighResolution, readColor);
+
+    // Optional broadphase collision
+    if (collisionOffset != 0) {
+        FSeek(collisionOffset);
+        BOX_COLI Collision;
+    }
+
+    // Cloth blob is locked behind format-not-known-enough territory in so we just parse it.
+    if (clothOffset != 0) {
+        FSeek(clothOffset);
+        ubyte clothBlobStartByte <comment="Cloth data begins here - Not yet decoded">;
+    }
+    FSeek(savedPosition);
+} PRIM_SUBMESH_HITMAN <read=Str("%u Vertices | %u Indices | %u UV Channels", this.vertexCount, this.indexCount, this.UVChannelCount)>;
+
+//----------------------------------------------------------------------------------
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+// 007 FIRST LIGHT: VERTEX BUFFERS
+//
+//   Section order in file (sequential, with 16-byte alignment between blocks):
+//      1. Indices            @ indexBufferOffset    (u16 * indexCount)
+//      2. Positions          @ vertexBufferOffset   (int16x4 * vertexCount)
+//      3. Vertex Attributes  @ vertexBufferOffset + vertexCount*8 (28 B/vert, stream-major sub-streams)
+//      4. BoxColi collision  @ collisionStreamOffset
+//      5. BoneInfo           @ weighted trailer wt[1]
+//      6. BoneIndices        @ weighted trailer wt[0]
+//      7. CopyBones          @ weighted trailer wt[3]
+//      8. Per-vertex skin    @ weighted trailer wt[4]
+//
+// Key differences from Hitman:
+//   - PrimSubMesh indirection FLATTENED - all submesh fields inlined into PrimMesh
+//   - "Auxiliary stream" pointer points at BoxColi collision, NOT per-vertex data
+//   - Per-vertex skinning lives in its OWN region (wt[4]), 8 B/vert (Hitman had it interleaved into the vertex buffer at 12 B/vert)
+//   - Vertex attributes (28 B/vert) are stream-major (concatenated arrays per sub-stream), not interleaved per-vertex like Hitman
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Positions: 8 bytes/vertex, int16x4. XYZ = quantized position. The 4th (W) component is the fourth bone index
+// (signed i16, full bone range, pairs with Weight_3 in the per-vertex skinning stream; 0 when the vertex has fewer than 4 influences). On non-weighted meshes it reads 0 or 32767.
+typedef struct (uint vertexCount) { VEC4SS Positions[vertexCount] <comment="Quantized: (I/32767)*posScale + posBias. W: 4th bone index on weighted meshes (pairs with Weight_3)", optimize=false>; } VERTEX_POSITION_STREAM_007FL <read=Str("%u Positions", sizeof(this) / 8)>;
+
+// Post-position vertex attribute region - layout VARIES by Object.subType.
+// Two confirmed layouts so far (verified by orthogonality + UV-smoothness analysis across triangle-adjacent vertex pairs):
+//
+// =========== subType=1 LINKED (16 bytes/vertex, Interleaved) ===========
+// Per-vertex 16-byte record laid out as:
+//   +0   VEC4UB Normal       (orthogonality test: mean |N.T|=0.002, ~100% perpendicular)
+//   +4   VEC4UB Tangent      (mean |N.B|=0.025, |T.B|=0.016 - all three pairwise orthogonal)
+//   +8   VEC4UB Bitangent
+//   +12  VEC2SS UV           (edge-delta=0.089 across triangle edges - smoothly varies)
+
+// =========== subType=2 WEIGHTED (Planar / Stream-Major) ===========
+// The vertex buffer is PLANAR: the position stream is followed by separate contiguous per-vertex streams, NOT one interleaved record per vertex. Layout in order:
+//
+//   Positions: 8 B/vert  int16x4 (XYZ quantized; W = 4th bone index)
+//   Sub-A    : 8 B/vert  int16x4 per-vertex Center of Rotation (lanes 0-2 = quantized CoR, lane 3 = coarse grouping scalar)
+//   NTB+UV   : 16 or 20 B/vert interleaved record:
+//              +0 Normal VEC4UB, +4 Tangent, +8 Bitangent,
+//              +12 UV0 VEC2SS, +16 UV1 VEC2SS
+//              (ONLY on the 20-byte record = haircards; UV1 = hair flow)
+//   Color    : 4 bytes/vertex VEC4UB RGBA
+//
+// Totals: 36 bytes/vertex single-UV (scalp, sim planes, brows, lashes) or 40 bytes/vertex dual-UV (haircards).
+//
+// VERIFIED on full uncut hair files: Cursor lands exactly at the vertex buffer end and normals decode unit-length + correctly oriented on 100% of non-degenerate verts across every object.
+// Reading this buffer as one interleaved record scrambles byte columns across the three streams and corrupts normals/UVs/colors; Planar is the only correct model.
+//
+// Sub-A (8 bytes/vertex) = per-vertex Center of Rotation for skinning (see CENTER_OF_ROTATION_007FL).
+//
+// Per-vertex interleaved NTB+UV record. 16 bytes for the single-UV layout (scalp, sim planes, brows, lashes)
+// 20 bytes for the dual-UV haircard layout (the extra VEC2SS is UV2 = hair flow)
+// The record width is decided by the caller from the attribute region size and not guessed per vertex.
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+typedef struct (int hasSecondUV, VEC2F &UVCoordScale, VEC2F &UVCoordBias) {
+    VEC4UB Normal    <comment="Decoded as (2X/255 - 1), W Component is Handedness">;
+    VEC4UB Tangent   <comment="Same encoding as Normal.">;
+    VEC4UB Bitangent <comment="Same encoding as Normal.">;
+    VEC2SS UV        <comment="UV0: (UV/32767)*UVScale + UVBias">;
+    if (hasSecondUV) VEC2SS UV2 <comment="UV1 (Haircards Only): Second Channel is Hair Flow">;
+} VERTEX_DATA_STREAM_007FL <read=Str("Normal: (%u, %u, %u) | Tangent: (%u, %u, %u) | Bitangent: (%u, %u, %u) | UV=(%u, %u)",
+                                     this.Normal.X, this.Normal.Y, this.Normal.Z, this.Tangent.X, this.Tangent.Y, this.Tangent.Z,
+                                     this.Bitangent.X, this.Bitangent.Y, this.Bitangent.Z, this.UV.X, this.UV.Y)>;
+
+// LINKED Layout: Pure interleaved 16-byte records per vertex (Single UV).
+typedef struct (uint vertexCount, VEC2F &UVCoordScale, VEC2F &UVCoordBias) {
+    local uint vi <hidden=true>;
+    for (vi = 0; vi < vertexCount; vi++) VERTEX_DATA_STREAM_007FL Vertex(0, UVCoordScale, UVCoordBias);
+} VERTEX_ATTRIBUTES_LINKED_007FL <read=Str("%u verts x 16 B interleaved (N+T+B+UV)", sizeof(this) / 16)>;
+
+// WEIGHTED layout (PLANAR / stream-major): Sub-A(8) + NTB+UV record stream + Color(4).
+// The NTB+UV record is 16 B (single UV) or 20 B (dual UV / haircards).
+// The width is derived from the attribute region size (See PRIM_MESH_007FL): The caller passes hasSecondUV.
+//   attrBytes >= 8 + 20 + 4 -> 20-byte record, UV2 present (haircards,    40 bytes/vertex total)
+//   Otherwise               -> 16-byte record, single UV   (scalp/planes, 36 bytes/vertex total)
+typedef struct (uint vertexCount, int hasSecondUV, VEC2F &UVCoordScale, VEC2F &UVCoordBias) {
+    // Sub-A: 8 B/vert = int16 x4 - the per-vertex Center of Rotation used for skinning.
+    // Lanes 0-2 dequantize with the POSITION scale/bias and land 2-40 cm from the vertex.
+    // Rigidly-bound vertices share an identical point per bone (spread of exactly 0), vertices
+    // sharing a bone+weight signature share one too, and blended vertices vary smoothly between
+    // their joints - optimized-CoR skinning, which stops shoulders and wrists collapsing.
+    // Since the value follows from the weights and the rest mesh, an exporter rebuilds it rather
+    // than needing to preserve it from a donor file.
+    // Lane 3: each CoR maps to exactly one lane value, but one lane value covers many CoRs, so it
+    // groups vertices more coarsely than the CoR does - likely a cluster or batch id. Unconfirmed.
+    struct CENTER_OF_ROTATION_007FL {
+        VEC3SS centerOfRotation <name="Center of Rotation", comment="Quantized with the position scale/bias (int16/32767 * scale + bias)">;
+        short  CORLane          <comment="Coarse grouping scalar; exact role unconfirmed">;
+    } CenterOfRotation[vertexCount] <optimize=false>;
+
+    // NTB + UV record stream (16 or 20 bytes/vertex depending on hasSecondUV).
+    local uint vi <hidden=true>;
+    for (vi = 0; vi < vertexCount; vi++) VERTEX_DATA_STREAM_007FL NTB_UV(hasSecondUV, UVCoordScale, UVCoordBias);
+
+    // Color: 4 bytes/vertex RGBA vertex color. Unpainted: 0xFFFFFFFF; painted meshes carry real data.
+    VEC4UB vertexColor[vertexCount] <optimize=false, comment="RGBA, Linear Colorspace">;
+} VERTEX_ATTRIBUTES_WEIGHTED_007FL;
+
+// STANDARD (subType=0): The LINKED 16 B/vert interleaved NTB+UV block, Optionally followed by a SEPARATE 4 bytes/vertex RGBA color stream then padding to the aux stream.
+// The color stream is NOT always present (Some props pack exactly 16 B/vert); Detect it by whether the gap between the NTB+UV block end and the aux stream is at least vertexCount*4 bytes.
+// Cloth meshes additionally set mesh field +0x18 (formerly "unknown_18") to the absolute offset of a cloth-simulation blob, paired with a nonzero clothID. Their position component lane reads 32767 (Non-weighted meshes don't carry a 4th bone index there lol)
+// Fallback below covers the remaining unverified subTypes (3 / 4 / 5 = STANDARD_UV_2/3/4).
+typedef struct (uint byteCount) { if (byteCount > 0) ubyte rawAttributes[byteCount] <comment="Unverified Subtype: Dumping raw post-position bytes. Need a sample to confirm layout.">; } VERTEX_ATTRIBUTES_RAW_007FL <read=Str("%u Raw Bytes (Unverified Subtype)", sizeof(this))>;
+
+//---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// 007 FIRST LIGHT: PER-VERTEX SKINNING - 8 bytes/vertex at weighted trailer field [4].
+//---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// Each vertex carries FOUR bone influences:
+//   ubyte Weight[4]  : Influence weights; The four bytes sum to 255 on every vertex.
+//   uint  PackedBones: Little Endian word packing three 10-BIT bone indices:
+//                           bone0 =  PackedBones        & 0x3FF (Pairs with Weight_0)
+//                           bone1 = (PackedBones >> 10) & 0x3FF (Pairs with Weight_1)
+//                           bone2 = (PackedBones >> 20) & 0x3FF (Pairs with Weight_2)
+//                           Bits 30-31: Unused
+//   The fourth bone index isn't in this stream: It's the W component of the int16x4 quantized position (See VERTEX_POSITION_STREAM_007FL) pairing with Weight_3.
+//
+// WHY 10 BITS: 007FL character rigs exceed 256 bones (All characters use 560 bone rigs with the face rig being ~210)
+// So ubyte joints are impossible; 10 bits addresses up to 1024 bones. This packing is why naive byte-wise reads look "almost right":
+// byte 0 equals bone0 whenever bone0 < 256 and bone1's low bits are clear so simple props or one bone rigged geometry decode fine while faces/limbs shatter.
+// IOI did this because they didn't want to commit to using a ushort per index, Optimization shenanigans if I had to guess
+//
+// NOTE: bones are GLOBAL BORG indices - no palette, no remap. BONE_INFO / BONE_INDICES are the engine's runtime bone-batch (connectivity) data and play no role in joint decoding.
+//---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+typedef struct {
+    ubyte Weight_0, Weight_1, Weight_2, Weight_3;
+    uint  PackedBones <comment="Three 10-bit BORG Bone Indices: Bits 0-9, 10-19, 20-29. 4th bone: Position W Component.", format=hex>;
+} VERTEX_SKINNING_007FL <read=Str("W: (%u, %u, %u, %u) | Bones: (%u, %u, %u (+Pos.W))",
+                                  this.Weight_0, this.Weight_1, this.Weight_2, this.Weight_3,
+                                  this.PackedBones & 0x3FF, (this.PackedBones >> 10) & 0x3FF, (this.PackedBones >> 20) & 0x3FF)>;
+
+typedef struct (uint vertexCount) { if (vertexCount > 0) VERTEX_SKINNING_007FL Weights[vertexCount] <optimize=false>; } PER_VERTEX_SKINNING_STREAM_007FL <read=Str("%u Skinned Vertices", sizeof(this) / 8)>;
+
+// CopyBones data block, Still no idea what it is.
+typedef struct (uint copyBonesCount) { if (copyBonesCount > 0) ubyte CopyBonesData[copyBonesCount] <comment="Contains uninitialized 0xEC markers in some files">; } COPY_BONES_DATA_007FL <read=Str("%u bytes", sizeof(this))>;
+
+//----------------------------------------------------------------------------------
+
+//-------------------------------------------------------------------------
+// HITMAN PrimMesh
+//-------------------------------------------------------------------------
+// Carries the offset to a 1-entry submesh table, position/UV quantization
+// parameters, cloth bitfield, and a weighted trailer if applicable.
+// The actual buffer data lives one level deeper, in PRIM_SUBMESH_HITMAN.
+//-------------------------------------------------------------------------
+typedef struct (uint isWeighted) {
+    PRIM_OBJECT Object;
+    uint  subMeshTableOffset  <name="Sub Mesh Table Offset", comment="Points at a table of submesh offsets">;
+    // Absolution stores the cloth ID variable earlier than 007FL/WoA do.
+    if (Game == "ABSOLUTION") {
+        uint absolutionClothId   <name="Cloth ID">;
+        uint absolutionMeshFlags <name="Mesh Flags (or Padding)", comment="0x10000 on Props, 0 on Characters">;
+    }
+    VEC4F vertexPositionScale <name="Vertex Position Scale", comment="Position Quantization Scale (Component[3] = 32767.0 in 007FL, 0.5 in HITMAN)">;
+    VEC4F vertexPositionBias  <name="Vertex Position Bias">;
+    VEC2F UVCoordScale        <name="UV Coordinates Scale">;
+    VEC2F UVCoordBias         <name="UV Coordinates Bias">;
+    // WoA/007FL put the cloth bitfield here.
+    if (Game != "ABSOLUTION") PRIM_CLOTH_ID clothID <name="Cloth ID">;
+
+    // Weighted Trailer: 16 bytes / 4 fields. Absolution uses it for both weighted and linked.
+    local uint hasTrailer <hidden=true> = isWeighted || (Game == "ABSOLUTION" && Object.subType == 1);
+    if (isWeighted || hasTrailer) {
+        uint copyBonesCount        <name="Copy Bones Count",         comment="Count of the copy_bones buffer">;
+        uint copyBonesOffset       <name="Copy Bones Buffer Offset">;
+        uint boneIndicesOffset     <name="Bone Indices Offset",      comment="Points at count-prefixed u16 buffer">;
+        uint boneInformationOffset <name="Bone Information Offset",  comment="Points at BoneInfo (255-entry boneRemap)">;
+    }
+
+    // Follow the submesh-table indirection
+    local int64 savedPosition <hidden=true> = FTell();
+
+    FSeek(subMeshTableOffset);
+    uint subMeshOffset <name="Sub Mesh Offset", comment="Pointer into the table (always a single entry in observed files)">;
+
+    FSeek(subMeshOffset);
+    PRIM_SUBMESH_HITMAN SubMesh(isWeighted, Object.Properties.isHighResolution, Object.Properties.useColor1, Object.subType);
+
+    // Walk the weighted trailer's pointers if present
+    if ((isWeighted || hasTrailer) && boneInformationOffset != 0) {
+        FSeek(boneInformationOffset);
+        BONE_INFO BoneInformation;
+    }
+    // ABSOLUTION boneIndices pool - NOT the WoA u32-overlap convention (byte-verified):
+    //   u16 elements[0] = TOTAL element count, SELF-INCLUSIVE (region ends at offset + 2*count);
+    //   then, contiguously per BoneInfo accel entry: u16 segmentCount (= accel.indicesCount + 1,
+    //   self-inclusive) followed by that many-minus-one u16 VERTEX indices. accel.offset is the
+    //   ELEMENT index of the first value. Runtime GPU batching data - regenerate on export.
+    if ((isWeighted || hasTrailer) && boneIndicesOffset != 0) {
+        FSeek(boneIndicesOffset);
+        BONE_INDICES_ABSOLUTION BoneIndicesPool;
+    }
+    // copyBones: (u32, u32) pairs; both lanes always multiples of 12 in shipping samples, reading
+    // like (lengthBytes, offsetBytes) over a 12-byte-stride target buffer. Target unconfirmed.
+    if ((isWeighted || hasTrailer) && copyBonesCount > 0 && copyBonesOffset != 0) {
+        FSeek(copyBonesOffset);
+        COPY_BONES_ABSOLUTION CopyBones(copyBonesCount);
+    }
+    FSeek(savedPosition);
+} PRIM_MESH_HITMAN <read=ReadPrimMeshHitman>;
+
+string ReadPrimMeshHitman(PRIM_MESH_HITMAN &m) {
+    string s;
+    SPrintf(s, "Material: %u | Submesh Offset: %u", m.Object.materialID, m.subMeshTableOffset);
+    return s;
+}
+
+//----------------------------------------------------------------------------------
+
+//---------------------------------------------------------------------
+// 007 FIRST LIGHT PrimMesh
+//---------------------------------------------------------------------
+// Field layout post-PRIM_OBJECT is now 7 consecutive uints (28 bytes total),
+//
+// Vertex attributes are NOT interleaved with positions. They occupy the
+// region (vertexBufferOffset + vertexCount*8, collisionStreamOffset),
+// laid out as 28 B/vert in 7 stream-major sub-streams of 4 B/vert each.
+//
+// Weighted trailer is 5 fields / 20 bytes (Hitman had 4 / 16 bytes).
+//
+//   +0x00  boneIndicesOffset           - count-prefixed ushort buffer (signature: uint count overlaps first two ushort indices)
+//   +0x04  boneInformationOffset       - identifies BoneInfo by signature (boneRemap mostly 0xFF, totalSize matches gap to boneIndicesOffset)
+//   +0x08  copyBonesCount                - Count and not a pointer (value matches gap between copyBonesOffset and perVertexSkinningOffset)
+//   +0x0C  copyBonesOffset             - opaque buffer of copyBonesCount bytes
+//   +0x10  perVertexSkinningOffset     - NEW in 007FL: 8 bytes/vertex skinning, weight bytes sum to 255 for all verts. Hitman keeps skinning inside the vertex buffer; 007FL lifts it into its own region.
+//---------------------------------------------------------------------
+typedef struct (uint isWeighted) {
+    PRIM_OBJECT Object;
+
+    //----- Submesh-flattened fields: 7 fields = 28 bytes -----
+    uint vertexCount             <name="Vertex Count">;
+    uint vertexBufferOffset      <name="Vertex Buffer Offset",        comment="Start of position stream (int16x4 per vertex). Attributes follow at +vertexCount*8.">;
+    uint indexCount              <name="Face Count",                  comment="Triangle-list index count (Always divisible by 3)">;
+    uint unknown_0C              <comment="Equivalent of Hitman's additionalIndexCount; Stored as 0 in the files">;
+    uint indexBufferOffset       <name="Face Buffer Offset",          comment="Pointer to ushort[indexCount] - Sits before positions in the file">;
+    uint collisionStreamOffset   <name="Box Collision Buffer Offset", comment="Points at BoxColi collision.">;
+    uint unknown_18              <comment="Equivalent of Hitman's clothOffset; Stored as 0 in the files">;
+
+    //----- Quantization parameters & cloth ID (matches Hitman) -----
+    VEC4F vertexPositionScale    <name="Vertex Position Scale", comment="Position Quantization Scale (Component [3] = 32767.0 in 007FL, was 0.5 in Hitman)">;
+    VEC4F vertexPositionBias     <name="Vertex Position Bias">;
+    VEC2F UVCoordScale           <name="UV Coordinates Scale">;
+    VEC2F UVCoordBias            <name="UV Coordinates Bias">;
+    PRIM_CLOTH_ID clothID        <name="Cloth ID">;
+
+    //----- Weighted Trailer: 5 fields / 20 bytes -----
+    if (isWeighted) {
+        uint boneIndicesOffset       <name="Bone Indices Offset",          comment="Points at count-prefixed u16 buffer (count overlaps first 2 indices)">;
+        uint boneInformationOffset   <name="Bone Information Offset",      comment="Points at BoneInfo (totalSize includes trailing 0xFF padding)">;
+        uint copyBonesCount          <name="Copy Bones Count",             comment="Byte count of the copy_bones buffer (NOT an offset)">;
+        uint copyBonesOffset         <name="Copy Bones Buffer Offset",     comment="Opaque buffer of copyBonesCount bytes; contains 0xEC uninit markers in samples">;
+        uint perVertexSkinningOffset <name="Vertex Weights Buffer Offset", comment="007FL Only: 8 B/vert (4w u8 + 4j u8 local palette). Weights sum to 255.">;
+    }
+
+    //----- Buffer Overlays: Drop the actual data at its real file offsets -----
+    local int64 savedPosition <hidden=true> = FTell();
+
+    // Index Buffer
+    if (indexCount > 0) {
+        FSeek(indexBufferOffset);
+        INDEX_BUFFER Indices(indexCount);
+    }
+
+    if (vertexCount > 0) {
+        // Position Buffer
+        FSeek(vertexBufferOffset);
+        VERTEX_POSITION_STREAM_007FL PositionStream(vertexCount);
+
+        // Vertex Attribute Stream: Layout depends on Object.subType.
+        // No FSeek needed; FTell() is already at the right place after positions.
+        //
+        // For WEIGHTED: The NTB+UV record width (16 vs 20) is derived from the attribute region size
+        // The bytes between the attribute start and the first block that follows the vertex buffer. attrBytes >= 8(Sub-A) + 20(record) + 4(color) => Dual-UV haircard layout.
+        local int64 attrStart <hidden=true> = FTell();
+        if (Object.subType == LINKED) { VERTEX_ATTRIBUTES_LINKED_007FL AttributeStream(vertexCount, UVCoordScale, UVCoordBias); }
+        else if (Object.subType == WEIGHTED) {
+            // Find the nearest block offset strictly greater than the attribute start.
+            local int64 vbufEnd <hidden=true> = collisionStreamOffset;
+            if (indexBufferOffset       > attrStart && indexBufferOffset       < vbufEnd) vbufEnd = indexBufferOffset;
+            if (unknown_18              > attrStart && unknown_18              < vbufEnd) vbufEnd = unknown_18;
+            if (boneIndicesOffset       > attrStart && boneIndicesOffset       < vbufEnd) vbufEnd = boneIndicesOffset;
+            if (boneInformationOffset   > attrStart && boneInformationOffset   < vbufEnd) vbufEnd = boneInformationOffset;
+            if (copyBonesOffset         > attrStart && copyBonesOffset         < vbufEnd) vbufEnd = copyBonesOffset;
+            if (perVertexSkinningOffset > attrStart && perVertexSkinningOffset < vbufEnd) vbufEnd = perVertexSkinningOffset;
+            local int64 attrBytes <hidden=true> = (vbufEnd - attrStart) / vertexCount;
+            local int hasSecondUV <hidden=true> = (attrBytes >= 32) ? 1 : 0;
+            VERTEX_ATTRIBUTES_WEIGHTED_007FL AttributeStream(vertexCount, hasSecondUV, UVCoordScale, UVCoordBias);
+        }
+        else {
+            // Unverified subType (STANDARD / STANDARD_UV_2/3/4). Fall back to raw byte dump derived from auxStreamOffset-minus-positions
+            // When aux is after the vertex buffer; Otherwise dump 16 bytes/vertex as a best-effort guess, likely a STANDARD-like Hitman layout).
+            local int64 postPosStart <hidden=true> = FTell();
+            local int64 fallbackBytes <hidden=true>;
+            if (collisionStreamOffset > postPosStart) { fallbackBytes = collisionStreamOffset - postPosStart; }
+            else { fallbackBytes = vertexCount * 16; } // best-effort: assume LINKED-like
+            VERTEX_ATTRIBUTES_RAW_007FL AttributeStream(fallbackBytes);
+        }
+
+        // BoxColi collision data
+        FSeek(collisionStreamOffset);
+        BOX_COLI Collision;
+    }
+
+    // Weighted-mesh data blocks: Walked in file order, Which isn't the same as trailer-field order:
+    // BoneInfo precedes BoneIndices in the file even though boneIndicesOffset is the first trailer field.
+    if (isWeighted) {
+        if (boneInformationOffset != 0) {
+            FSeek(boneInformationOffset);
+            BONE_INFO BoneInformation;
+        }
+
+        if (boneIndicesOffset != 0) {
+            FSeek(boneIndicesOffset);
+            BONE_INDICES BoneIndicesBuffer;
+        }
+
+        if (copyBonesOffset != 0 && copyBonesCount > 0) {
+            FSeek(copyBonesOffset);
+            COPY_BONES_DATA_007FL CopyBones(copyBonesCount);
+        }
+
+        if (perVertexSkinningOffset != 0) {
+            FSeek(perVertexSkinningOffset);
+            PER_VERTEX_SKINNING_STREAM_007FL PerVertexSkinning(vertexCount);
+        }
+    }
+    FSeek(savedPosition);
+} PRIM_MESH_007FL <read=ReadPrimMesh007FL>;
+
+string ReadPrimMesh007FL(PRIM_MESH_007FL &m) {
+    string s;
+    SPrintf(s, "Material: %u | %u Verts | %u Tris", m.Object.materialID, m.vertexCount, m.indexCount / 3);
+    return s;
+}
+
+//----------------------------------------------------------------------------------
+
+struct {
+    // File Start: Pointer/Offset to PRIM_OBJECT_HEADER then 8 bytes of padding
+    // This is obviously a uint32 instead of a uint64 on Absolution but it happens to work so whatever lol #lazy
+    uint64 headerOffset <name="Header Offset">;
+
+    // Jump to and read the PrimObjectHeader (footer)
+    FSeek(headerOffset);
+    PRIM_OBJECT_HEADER ObjectHeader;
+
+    // Read the object offset table
+    FSeek(ObjectHeader.objectTableOffset);
+    uint objectOffsets[ObjectHeader.objectCount] <name="Object Offsets", optimize=false>;
+
+    // Pull the global weighted flag; Drives every PrimMesh's read path
+    local uint isWeighted <hidden=true> = ObjectHeader.Properties.isWeightedObject;
+
+    // Walk each object and parse its PrimMesh (which itself dives into buffers).
+    // The loop counter is local to this struct so inner loops in nested structs can't clobber it.
+    local uint i <hidden=true>;
+    for (i = 0; i < ObjectHeader.objectCount; i++) {
+        FSeek(objectOffsets[i]);
+        if (Game == "007FL") PRIM_MESH_007FL Meshes(isWeighted) <optimize=false>;
+        else PRIM_MESH_HITMAN Meshes(isWeighted) <optimize=false>;
+    }
+} PRIM <name="IO Interactive Glacier 2 .PRIM RenderPrimitive">;
+
+//----------------------------------------------------------------------------------

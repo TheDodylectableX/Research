@@ -1,0 +1,57 @@
+//-------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: INDEX.bt
+//   Authors: Dodylectable, tjoener
+//   Version: 1.0
+//   Purpose: Reverse engineering DOOM 2016's file list format
+//  Category: Archives / File Lists
+// File Mask: *.index | *.pindex
+//  ID Bytes: 05 53 45 52
+//   History: 
+//-------------------------------------------------------------
+
+// Pretty much the same as idT5's INDEX except the file count is part of the header and the resource offset is now uint64 instead of 32
+
+#include "../Common.bt"
+
+typedef enum <ubyte> {
+    INDEX     = 4,
+    RESOURCES = 5
+} INDEX_TYPE;
+
+typedef struct {
+    BigEndian();
+    INDEX_TYPE INDEXType  <name="INDEX Type", comment="4: Index | 5: Resources">;
+    char       Magic[3]   <comment="Always SER">;
+    uint       INDEXSize  <name="INDEX Size", comment="Size of this file minus 32 bytes">;
+    FSkip(24); // Reserved
+    uint       fileCount  <name="File Count">;
+} INDEX_HEADER <read=Str("INDEX Type: %u | INDEX Magic: %s | INDEX Size: %u bytes | File Count: %u Files", this.INDEXType, this.Magic, this.INDEXSize + 32, this.fileCount)>;
+
+//-------------------------------------------------------------
+
+typedef struct {
+    BigEndian();
+    uint   resourceIndex             <name="Resource Index">;
+    LittleEndian();
+    String resourceType             <name="Resource Type">;
+    String resourceNameUncooked     <name="Resource Name (Uncooked)", comment="Referenced in DECL files">;
+    String resourceNameCooked       <name="Resource Name (Cooked)",   comment="This is in the actual archive">;
+    BigEndian();
+    uint64 resourceOffset           <name="Resource Offset">;
+    uint   resourceSizeUncompressed <name="Resource Size (Uncompresed)">;
+    uint   resourceSizeCompressed   <name="Resource Size (Compressed)">;
+    uint   useBits                  <name="Use Bits?">;
+    ubyte  fileID                   <name="File ID">;
+} RESOURCES_ENTRY <name="File Entry", read=Str("ID: %u | %s | %s | File Offset: %u | File Size (Uncompressed): %u bytes",
+                                               this.resourceIndex, this.resourceType.ActualString, this.resourceNameUncooked.ActualString, this.resourceOffset, this.resourceSizeUncompressed)>;
+
+//-------------------------------------------------------------
+
+struct {
+    INDEX_HEADER Header;
+    if (Header.fileCount > 0) RESOURCES_ENTRY Entry[Header.fileCount] <optimize=false>;
+} INDEX <name="id Software id Tech 6 .INDEX File">;
+
+//-------------------------------------------------------------

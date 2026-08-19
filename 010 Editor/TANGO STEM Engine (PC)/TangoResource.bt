@@ -1,0 +1,95 @@
+//--------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: TangoResource.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Tango Gameworks' The Evil Within archives
+//  Category: Archives
+// File Mask: *.tangoresource
+//  ID Bytes: 23 94 AB CD
+//  History:
+//--------------------------------------------------------------------------
+
+#include "../Common.bt"
+
+typedef struct {
+    BigEndian();
+    char   Magic[4];
+    ushort Version;
+    ushort aliasCount <name="Alias Count", comment="Number of resource aliases in the table">;
+} TANGORES_HEADER;
+
+typedef struct {
+    LittleEndian();
+    String NGPath      <name="NG Path",     comment="Variant Path (_ng | _ws) Suffixes">;
+    String basePath    <name="Base Path",   comment="Shipped resource path">;
+    uint resourceID    <name="Resource ID", comment="Runtime hash">;
+} TANGORES_ALIAS_ENTRY <name="Alias Table", read=Str("ID: 0x%08X | %s -> %s", this.resourceID, this.NGPath.ActualString, this.basePath.ActualString), optimize=false>;
+
+typedef struct {
+    BigEndian();
+    uint TOCOffset           <name="Table of Contents Offset", comment="Absolute file offset to the TOC section">;
+    uint TOCSize             <name="Table of Contents Size",   comment="Size of TOC in bytes; TOCOffset + TOCSize == FileSize()">;
+} TANGORES_TOC_POINTER_TABLE <name="Table of Contents Pointer Table", read=Str("Table of Contents Offset: %u | Size: %u bytes", this.TOCOffset, this.TOCSize)>;
+
+typedef struct {
+    BigEndian();
+    uint fileCount               <name="File Count",                     comment="Number of file entries in this TOC">;
+    uint directoryCount          <name="Directory Count",                comment="Number of directory nodes">;
+    uint TOCUnknownFlags         <name="Table of Content Flags">;
+    uint hierarchyFileCount      <name="Hierarchy Tree File Count",      comment="Doesn't match up but parses properly">;
+    uint hierarchyDirectoryCount <name="Hierarchy Tree Directory Count", comment="Doesn't match up but parses properly">;
+} TANGORES_TOC_HEADER            <name="Table of Contents Header", read=Str("%u Files | %u Directories", this.hierarchyFileCount, this.hierarchyDirectoryCount)>;
+
+typedef struct {
+    ushort fileIndices[TOCHeader.hierarchyFileCount]           <name="File Hierarchy Indices",      comment="Node indices for files">;
+    ushort directoryIndices[TOCHeader.hierarchyDirectoryCount] <name="Directory Hierarchy Indices", comment="Node indices for directories">;
+} TANGORES_HIERARCHY_TREE <name="Hierarchy Tree">;
+
+typedef struct {
+    uint namesBlockSize     <name="Names Block Size", comment="Total byte size of the string block">;
+    uint namesCount         <name="Names Count",      comment="Number of null-terminated name strings">;
+} TANGORES_TOC_NAMES_HEADER <name="Table of Contents Names Header">;
+
+typedef struct { string Name; } TANGORES_ASSET_NAME <read=this.Name, optimize=false>;
+
+typedef struct {
+    uint nameIndex        <name="File Name Index",          comment="Index into the names string pool">;
+    uint dataOffset       <name="File Data Offset",         comment="Absolute file offset of compressed file data">;
+    uint sizeCompressed   <name="File Size (Compressed)",   comment="Size of compressed file data in bytes">;
+    uint sizeUncompressed <name="File Size (Decompressed)", comment="Uncompressed if it equals compressed">;
+} TANGORES_FILE_ENTRY     <read=Str("%s | Offset: %u | Compressed: %u | Uncompressed: %u",
+                                   (this.nameIndex < TANGORESOURCE.namesHeader.namesCount ? TANGORESOURCE.Names[this.nameIndex].Name : "INVALID ASSET NAME INDEX"),
+                                    this.dataOffset, this.sizeCompressed, this.sizeUncompressed), optimize=false>;
+
+//--------------------------------------------------------------------------
+
+struct {
+    TANGORES_HEADER Header;
+    if (Header.aliasCount > 0) TANGORES_ALIAS_ENTRY aliasTable[Header.aliasCount];
+
+    TANGORES_TOC_POINTER_TABLE TOCPointer;
+
+    local quad blobRegionStart <hidden=true> = FTell();
+    local quad blobRegionSize  <hidden=true> = TOCPointer.TOCOffset - blobRegionStart;
+    if (blobRegionSize > 0) { ubyte fileData[blobRegionSize] <name="File Data", comment="Compressed resource blobs (non-standard compression)">; }
+
+    FSeek(TOCPointer.TOCOffset);
+    TANGORES_TOC_HEADER       TOCHeader;
+    TANGORES_HIERARCHY_TREE   hierarchyTree;
+    TANGORES_TOC_NAMES_HEADER namesHeader;
+    TANGORES_ASSET_NAME       Names[namesHeader.namesCount];
+    TANGORES_FILE_ENTRY       FileEntries[TOCHeader.fileCount];
+
+    local quad dependencyTableStart <hidden=true> = FTell();
+    local quad dependencyTableData  <hidden=true> = (TOCPointer.TOCOffset + TOCPointer.TOCSize) - dependencyTableStart;
+
+    if (dependencyTableData > 0 && dependencyTableData % 4 == 0) {
+        struct {
+            uint Entries[dependencyTableData / 4]  <comment="Dependency/Tag graph (ushort pairs in uint BE; Not fully decoded)">;
+        } DependencyTable <name="Dependency Table", comment="Inter-resource dependency or category graph">;
+    }
+} TANGORESOURCE <name="Tango Gameworks STEM Engine .tangoresource Archive">;
+
+//--------------------------------------------------------------------------

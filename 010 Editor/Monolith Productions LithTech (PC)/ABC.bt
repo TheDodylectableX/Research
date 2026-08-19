@@ -1,0 +1,235 @@
+//-------------------------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: ABC.bt
+//   Authors: Dodylectable, haekb (Initial Research)
+//   Version: 1.0
+//   Purpose: Reverse engineering Monolith Productions' LithTech Engine model and animation format
+//  Category: Models / Animations
+// File Mask: *.ABC
+//  ID Bytes: 
+//   History: 
+//-------------------------------------------------------------------------------------------------
+
+// https://github.com/haekb/io_scene_lithtech
+
+LittleEndian();
+#include "../Common.bt"
+
+local uint g_Version   <hidden=true> = 0;
+local uint g_NodeCount <hidden=true> = 0;
+local uint g_LODCount  <hidden=true> = 0;
+local uint g_AnimCount <hidden=true> = 0;
+local uint g_V6_MDVertCounts[4096] <hidden=true>; 
+
+typedef struct { ushort len; if (len > 0) char text[len]; } LTString <read=ReadLTString>;
+string ReadLTString(LTString &s) { return (exists(s.text)) ? s.text : ""; }
+
+//-------------------------------------------------------------------------------------------------
+
+//--- V6 Structures
+typedef struct {
+    VEC3F Position;
+    VEC3SB Normal;
+    byte NodeIndex;
+    VEC2US UV;
+} V6Vert;
+
+typedef struct {
+    VEC2F UVCoords[3];
+    VEC3US VertexIndex;
+    VEC3SB Normal;
+} V6Face;
+
+typedef struct {
+    VEC3F BoundingBoxMin, BoundingBoxMax;
+    uint LODs; g_LODCount = LODs;
+    ushort VertexStart[g_LODCount+1];
+    uint FaceCount; if (FaceCount > 0) V6Face Faces[FaceCount] <optimize=false>;
+    uint VertexCountPrimary, VertexCountSecondary; if (VertexCountSecondary > 0) V6Vert Verts[VertexCountSecondary] <optimize=false>; 
+} V6Piece;
+
+//--- V13 Structures
+typedef struct {
+    uint NodeIndex;
+    VEC3F Location;
+    float Bias;
+} V13Weight;
+
+typedef struct {
+    ushort WeightCount, SubLODIndex;
+    if (WeightCount > 0) V13Weight Weights[WeightCount];
+    VEC3F Location, Normal;
+} V13Vert;
+
+typedef struct {
+    uint FaceCount; 
+    if (FaceCount > 0) struct {
+        struct {
+            VEC2F UVCoords;
+            ushort VertexIndex;
+            } V[3];
+        } Faces[FaceCount] <optimize=false>; 
+    uint VertCount; 
+    if (VertCount > 0) V13Vert Verts[VertCount] <optimize=false>; 
+} V13LOD;
+
+typedef struct {
+    ushort MaterialIndex;
+    float SpecP, SpecS; 
+    if (g_Version > 9) float LODW; 
+    ushort Unknown;
+    LTString Name;
+    V13LOD LODs[g_LODCount] <optimize=false>; 
+} V13Piece;
+
+//--- Animation Structures
+typedef struct {
+    VEC3F Location;
+    VEC4F Rotation;
+    if (g_Version >= 13) VEC2F Extra;
+} AnimTransform;
+
+typedef struct { uint Time; LTString Command; } Keyframe;
+
+typedef struct {
+    if (g_Version == 6) {
+        LTString Name;
+        uint Len;
+        VEC3F BoundingBoxMin, BoundingBoxMax;
+        uint KeyFrameCount;
+        if (KeyFrameCount > 0) struct {
+            uint T;
+            VEC3F Min, Max;
+            LTString S;
+            } Keyframes[KeyFrameCount] <optimize=false>;
+        local uint currentAnimNodeIndex = 0;
+        struct V6Track { 
+            struct {
+                VEC3F Location;
+                VEC4F Rotation;
+                } Base[KeyFrameCount] <optimize=false>;
+            local uint md = g_V6_MDVertCounts[currentAnimNodeIndex++];
+            if (md > 0) struct { VEC3UB KFDeforms; } Deform[KeyFrameCount * md] <optimize=false>;
+            VEC3F Scale, Transformation;
+        } Tracks[g_NodeCount] <optimize=false>;
+    } else {
+        VEC3F Extents;
+        LTString Name;
+        int Unknown;
+        uint Interp, KeyFrameCount;
+        if (KeyFrameCount > 0) Keyframe Keyframes[KeyFrameCount] <optimize=false>;
+        struct V13Track { 
+            if (g_Version == 13) int paddingMinusOne <hidden=true>;
+            AnimTransform Frames[KeyFrameCount] <optimize=false>; 
+        } Tracks[g_NodeCount] <optimize=false>;
+    }
+} AnimationBlock;
+
+//-------------------------------------------------------------------------------------------------
+
+//--- Section Dispatcher
+typedef struct {
+    LTString Type;
+    int NextSection <name="Next Section Offset">;
+    local string name <hidden=true> = ReadLTString(Type);
+
+    if (name == "Header") {
+        local uint check <hidden=true> = ReadUInt();
+        if (check > 100) { 
+            g_Version = 6;
+            LTString Version;
+            LTString commandString <name="Command String">;
+        } else { 
+            struct {
+                uint Version; g_Version = Version;
+                uint KeyFrameCount, AnimationCount; g_AnimCount = AnimationCount;
+                uint NodeCnt; g_NodeCount = NodeCnt;
+                uint PieceCount, ChildModelCount, FaceCount, VertexCount, MorphWeightSetCount, LODCount; g_LODCount = LODCount;
+                uint SCnt, WSetCnt, StrCnt, StrLen;
+                if (g_Version >= 13) uint Unknown_v13;
+                LTString CommandString;
+                float Radius;
+                uint LODDistanceCount;
+                char Padding[64];
+                if (LODDistanceCount > 0) float LODDists[LODDistanceCount];
+            } V13Header;
+        }
+    } else if (name == "Nodes") {
+        if (g_Version == 6) {
+            local int Children = 1; g_NodeCount = 0;
+            while (Children > 0) {
+                struct V6Node { 
+                    VEC3F BoundingBoxMin, BoundingBoxMax;
+                    LTString Name;
+                    ushort Index;
+                    byte Flags;
+                    uint ModelDeformVertexCount; if (ModelDeformVertexCount > 0) ushort ModelDeformVertexList[ModelDeformVertexCount];
+                    uint ChildCount;
+                    g_V6_MDVertCounts[g_NodeCount++] = ModelDeformVertexCount;
+                    Children += ChildCount;
+                } Node <read=this.Name.text>;
+                Children--;
+            }
+        } else {
+            struct V13Node {
+                LTString Name;
+                ushort Index;
+                byte Flags;
+                VEC4F Matrix[4];
+                uint Children;
+                } Nodes[g_NodeCount] <read=this.Name.text, optimize=false>;
+            uint MorphWeightSetCount;
+            if (MorphWeightSetCount > 0)
+                struct {
+                    LTString MorphName;
+                    uint MorphNumber;
+                    if (MorphNumber > 0) float MorphWeight[MorphNumber];
+                } MorphWeightSets[MorphWeightSetCount] <read=this.MorphName.text, optimize=false>;
+        }
+    } else if (name == "Pieces" && g_Version >= 9) {
+        uint TotalWeightCount, PieceCount;
+        V13Piece Pieces[PieceCount] <read=this.Name.text, optimize=false>;
+    } else if (name == "Geometry" && g_Version == 6) {
+        V6Piece Piece;
+    } else if (name == "Animation") {
+        uint AnimationCount; g_AnimCount = AnimationCount;
+        AnimationBlock Anims[AnimationCount] <read=this.Name.text, optimize=false>;
+    } else if (name == "Sockets") {
+        uint SocketCount;
+        struct SocketV13 {
+            uint NodeIndex;
+            LTString Name;
+            VEC4F Rotation;
+            VEC3F Location;
+        } Sockets[SocketCount] <read=this.Name.text, optimize=false>;
+    } else if (name == "ChildModels") {
+        ushort ModelCount;
+        struct ChildModelV13 {
+            LTString Name;
+            uint Build;
+            AnimTransform Transforms[g_NodeCount] <optimize=false>;
+        } Models[ModelCount] <optimize=false>;
+    } else if (name == "AnimBindings") {
+        uint BindingCount;
+        struct AnimBinding {
+            LTString Name;
+            VEC3F Extents;
+            VEC3F Origin;
+        } Bindings[BindingCount] <read=this.Name.text, optimize=false>;
+    } else if (name == "AnimDims" && g_Version == 6) { if (g_AnimCount > 0) VEC3F animDims[g_AnimCount]; } // Dimensions per animation
+    else if (name == "TransformInfo" && g_Version == 6) { struct { uint flipGeom, flipAnim; } transformInfo; } // V6 flip flags
+
+    if (NextSection > 0 && NextSection <= FileSize()) FSeek(NextSection);
+} Section <read=this.Type.text>;
+
+//-------------------------------------------------------------------------------------------------
+
+struct {
+    while (!FEof()) {
+        Section section <name="Section">;
+        if (section.NextSection == -1 || section.NextSection > FileSize()) break;
+    }
+} ABC <name="Monolith Productions LithTech .ABC Model | Animation File">;
+
+//-------------------------------------------------------------------------------------------------

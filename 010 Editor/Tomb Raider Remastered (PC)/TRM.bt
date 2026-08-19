@@ -24,31 +24,31 @@ const string VertexStructure <hidden=true> = "Default";
 //------------------------------------------------------------------------
 
 typedef struct { // Thanks MuruCoder for figuring the shaders out
-    uint Type           <name="Shader Type">;
-    VEC4F Parameters    <name="Shader Parameters">;
-    uint OpaqueOffset   <name="Opaque Offset",   comment="This is the start of how many triangles that need to be rendered opaque">;
-    uint OpaqueLength   <name="Opaque Length",   comment="This is the length of how many triangles that need to be rendered opaque, Divide by 3">;
-    uint AlphaOffset    <name="Alpha Offset",    comment="This is the start of how many triangles that need to be rendered with alpha masking">;
-    uint AlphaLength    <name="Alpha Length",    comment="This is the length of how many triangles that need to be rendered with alpha masking, Divide by 3">;
-    uint AdditiveOffset <name="Additive Offset", comment="This is the start of how many triangles that need to be rendered additive">;
-    uint AdditiveLength <name="Additive Length", comment="This is the length of how many triangles that need to be rendered additive, Divide by 3">;
-} Shaders <name="Shaders">;
+    uint  Type           <name="Shader Type">;
+    VEC4F Parameters     <name="Shader Parameters">;
+    uint  opaqueOffset   <name="Opaque Offset",   comment="This is the start of how many triangles that need to be rendered opaque">;
+    uint  opaqueLength   <name="Opaque Length",   comment="This is the length of how many triangles that need to be rendered opaque, Divide by 3">;
+    uint  alphaOffset    <name="Alpha Offset",    comment="This is the start of how many triangles that need to be rendered with alpha masking">;
+    uint  alphaLength    <name="Alpha Length",    comment="This is the length of how many triangles that need to be rendered with alpha masking, Divide by 3">;
+    uint  additiveOffset <name="Additive Offset", comment="This is the start of how many triangles that need to be rendered additive">;
+    uint  additiveLength <name="Additive Length", comment="This is the length of how many triangles that need to be rendered additive, Divide by 3">;
+} TRM_SHADER;
 
 typedef struct {
-    char Magic[4]     <name="Magic">;
-    uint ShaderCount  <name="Shader Count">;
-    Shaders shaders[ShaderCount];
-    uint TextureCount <name="Texture Count">;
-} Header <name="Header", read=Str("Model Type: %s| %d Textures", this.Magic, this.TextureCount)>;
+    char       Magic[4]     <name="Magic">;
+    uint       shaderCount  <name="Shader Count">;
+    TRM_SHADER Shaders[shaderCount];
+    uint       textureCount <name="Texture Count">;
+} TRM_HEADER <read=Str("Model Type: %s| %u Shaders | %u Textures", this.Magic, this.shaderCount, this.textureCount)>;
 
-typedef struct { ushort ID <comment="Corresponds to a DDS file with the same name in TEX folder">; } Textures <name="Textures", read=Str("Texture: %d.DDS", this.ID)>;
+typedef struct { ushort ID <comment="Corresponds to a DDS file with the same name in TEX folder">; } TRM_TEXTURE <read=Str("Texture: %d.DDS", this.ID)>;
 
 //------------------------------------------------------------------------
 
 typedef struct {
     VEC3F  Positions;
     VEC3UB Normals       <comment="Subtract 127 and normalize">;
-    ubyte  MaterialIndex <name="Material Index">;
+    ubyte  materialIndex <name="Material Index">;
     if (VertexStructure == "Default") {
         VEC3UB Indices  <name="Bone Indices">;
         ubyte U         <read=UByteToFloat>;
@@ -59,9 +59,9 @@ typedef struct {
         VEC3UB Weights <name="Bone Weights">;
         VEC2F UV;
     }
-} Vertices;
+} TRM_VERTEX;
 
-typedef struct { VEC3US Triangles; } Triangles;
+typedef struct { VEC3US Triangles; } TRM_TRIANGLE;
 
 //------------------------------------------------------------------------
 // SKELETON / HEAD FACIAL RIG
@@ -96,63 +96,50 @@ typedef struct {
 //------------------------------------------------------------------------
 
 struct {
-    Header header;
-    Textures textures[header.TextureCount];
+    TRM_HEADER Header;
+    TRM_TEXTURE Textures[Header.textureCount];
     while (!ReadByte()) FSkip(1);
     if (Type == "Head") {
-        uint BoneCount <name="Bone Count">;
-        if (BoneCount > 0) {
+        uint boneCount <name="Bone Count">;
+        if (boneCount > 0) {
             struct {
                 // Bind-pose transforms (head-local space). Each bone's rest position + orientation relative to whatever the skinning system uses as origin.
-                Matrix BindPose[BoneCount] <name="Bind Pose Matrices", optimize=false>;
+                Matrix bindPose[boneCount] <name="Bind Pose Matrices", optimize=false>;
 
                 // ---- UNRESOLVED: indirection / link table ----
-                // 55 entries in LARA_HEAD.TRM. Values range from 0..86 with
-                // one 0xFFFFFFFF sentinel, so it is NOT a bone hierarchy
-                // (we only have 33 bones). Likely candidates:
+                // 55 entries in LARA_HEAD.TRM. Values range from 0..86 with one 0xFFFFFFFF sentinel, So it is NOT a bone hierarchy (we only have 33 bones).
+                // Likely candidates:
                 //   - (expression_id, target_index) lookup pairs
                 //   - linked-list nodes (next, prev) into the pose data
                 //   - sparse animation track references
-                // The sentinel -1 suggests the second field is a "next"
-                // pointer terminating a chain.
-                uint LinkTableCount <name="Link Table Count">;
+                // The sentinel -1 suggests the second field is a "next" pointer terminating a chain.
+                uint linkTableCount <name="Link Table Count">;
                 struct {
                     uint A <name="A">;
-                    uint B <name="B (sentinel 0xFFFFFFFF = -1)">;
-                } LinkTable[LinkTableCount] <name="Link Table", optimize=false>; // Purpose Unconfirmed
+                    uint B <name="B">;
+                } linkTable[linkTableCount] <name="Link Table", optimize=false>; // Purpose Unconfirmed
 
                 // ---- Facial expression / phoneme table ----
-                // Each entry is an ID into the engine's facial expression
-                // enum. In LARA_HEAD.TRM they are 7..32 (26 entries, likely
-                // phonemes / visemes for lipsync) and 41..54 (14 entries,
-                // likely emotion expressions). The gap 33..40 suggests two
-                // distinct categories.
-                uint ExpressionCount <name="Expression Count">;
-                uint ExpressionID[ExpressionCount] <name="Expression ID", comment="Engine-side enum values for phonemes/emotions">;
+                // Each entry is an ID into the engine's facial expression enum. In LARA_HEAD.TRM they are 7..32 (26 entries, likely phonemes / visemes for lipsync)
+                // and 41..54 (14 entries, likely emotion expressions). The gap 33..40 suggests two distinct categories.
+                uint expressionCount <name="Expression Count">;
+                uint expressionID[expressionCount] <name="Expression ID", comment="Engine-side enum values for phonemes/emotions">;
 
-                // PoseTrackCount: number of MATRIX3X4 entries stored per
-                // expression. 508 in LARA_HEAD.TRM. Does not equal BoneCount
-                // (33), so this is NOT one-matrix-per-bone. Probably the
-                // total slot count of a global facial-rig deformer pool,
-                // indexed sparsely via the LinkTable above.
-                ushort PoseTrackCount <name="Pose Track Count", comment="Per Expression">;
+                // PoseTrackCount: number of MATRIX3X4 entries stored per expression. 508 in LARA_HEAD.TRM. Does not equal BoneCount (33)
+                // So this is NOT one-matrix-per-bone. Probably the total slot count of a global facial-rig deformer pool, indexed sparsely via the LinkTable above.
+                ushort poseTrackCount <name="Pose Track Count", comment="Per Expression">;
                 ushort Reserved       <name="Reserved / Unused", comment="0 in observed samples">;
 
-                // Per-expression transforms. Storage is dense:
-                //   ExpressionCount * PoseTrackCount * sizeof(MATRIX3X4)
-                // = 40 * 508 * 48 = 975,360 bytes for Lara's head.
-                if (ExpressionCount * PoseTrackCount > 0) {
-                    Matrix ExpressionPose[ExpressionCount * PoseTrackCount] <name="Per-Expression Pose Matrices", optimize=false>;
-                }
-
+                // Per-expression transforms. Storage is dense: ExpressionCount * PoseTrackCount * sizeof(MATRIX3X4) = 40 * 508 * 48 = 975,360 bytes for Lara's head.
+                if (expressionCount * poseTrackCount > 0) { Matrix expressionPose[expressionCount * poseTrackCount] <name="Per-Expression Pose Matrices", optimize=false>; }
             } Skeleton <name="Facial Animation Block">;
         }
     }
-    uint FaceCount   <name="Face Count", comment="Divide by 3 to get the actual count">;
-    uint VertexCount <name="Vertex Count">;
-    if (FaceCount > 0)   Triangles triangles[FaceCount / 3] <name="Triangles", comment="Reverse Winding Order (i3 -> i1)", optimize=false>;
+    uint faceCount   <name="Face Count">;
+    uint vertexCount <name="Vertex Count">;
+    if (faceCount > 0)   TRM_TRIANGLE Triangles[faceCount / 3] <comment="Reverse Winding Order (i3 -> i1)", optimize=false>;
     while (!ReadShort()) FSkip(2);
-    if (VertexCount > 0) Vertices vertices[VertexCount] <name="Vertices", optimize=false>;
+    if (vertexCount > 0) TRM_VERTEX   Vertices[vertexCount]    <optimize=false>;
 } TRM <name="Tomb Raider I-V Remastered .TRM Model">;
 
 //------------------------------------------------------------------------

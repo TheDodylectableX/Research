@@ -11,18 +11,18 @@
 //   History: 
 //---------------------------------------------------------------
 
-// Uses proprietary compression from Dungeon Keeper 2
+// Uses EA's REFPACK compression which is modded LZSS.
 
 LittleEndian();
 
 typedef struct {
     uint fileNameOffset <name="File Name Offset">;
 
-    local uint64 back <hidden=true> = FTell();
+    local uint64 currentPositionFile <hidden=true> = FTell();
     if (fileNameOffset > 0 && fileNameOffset < FileSize()) {
         FSeek(fileNameOffset);
         string fileName <name="File Name">;
-        FSeek(back);
+        FSeek(currentPositionFile);
     } else { local string fileName = "INVALID FILE NAME OFFSET"; }
 
     uint fileOffset           <name="File Offset">;
@@ -31,30 +31,30 @@ typedef struct {
 
     local uint32 actualSize <hidden=true> = (fileSizeCompressed == 0) ? fileSizeUncompressed : fileSizeCompressed;
     if (actualSize > 0 && fileOffset > 0 && fileOffset < FileSize()) {
-        local uint64 dataBack <hidden=true> = FTell();
+        local uint64 currentPositionFileData <hidden=true> = FTell();
         FSeek(fileOffset);
         byte fileData[actualSize] <name="File Data">;
-        FSeek(dataBack);
+        FSeek(currentPositionFileData);
     }
 } FKNL_FILE_ENTRY <read=Str("%s | File Offset: %u | File Size (Uncompressed): %u bytes | File Size (Compressed): %u bytes", this.fileName, this.fileOffset, this.fileSizeUncompressed, this.fileSizeCompressed)>;
 
 typedef struct {
     uint folderNameOffset <name="Folder Name Offset">;
     
-    local uint64 back <hidden=true> = FTell();
+    local uint64 currentPositionFolder <hidden=true> = FTell();
     if (folderNameOffset > 0 && folderNameOffset < FileSize()) {
         FSeek(folderNameOffset);
         string folderName <name="Folder Name">;
-        FSeek(back);
+        FSeek(currentPositionFolder);
     } else { local string folderName = "INVALID FOLDER NAME OFFSET"; }
 
     uint folderContentOffset <name="Folder Content Offset">;
 
     if (folderContentOffset > 0 && folderContentOffset < FileSize()) {
-        local uint64 jumpBack <hidden=true> = FTell();
+        local uint64 currentPositionFolderData <hidden=true> = FTell();
         FSeek(folderContentOffset);
         struct FKNL_FOLDER_DATA content <name="Folder Content">;
-        FSeek(jumpBack);
+        FSeek(currentPositionFolderData);
     }
 } FKNL_FOLDER_ENTRY <read=folderName>;
 
@@ -65,28 +65,28 @@ typedef struct {
     uint folderCount   <name="Folder Count">;
 
     if (fileCount > 0) {
-        local uint64 fileBack <hidden=true> = FTell();
+        local uint64 currentPositionRootFile <hidden=true> = FTell();
         FSeek(filesOffset);
         FKNL_FILE_ENTRY files[fileCount] <name="Files", optimize=false>;
-        FSeek(fileBack);
+        FSeek(currentPositionRootFile);
     }
 
     if (folderCount > 0) {
-        local uint64 folderBack <hidden=true> = FTell();
+        local uint64 currentPositionRootFolder <hidden=true> = FTell();
         FSeek(foldersOffset);
         FKNL_FOLDER_ENTRY folders[folderCount] <name="Folders", optimize=false>;
-        FSeek(folderBack);
+        FSeek(currentPositionRootFolder);
     }
 } FKNL_FOLDER_DATA <read=Str("%u Files | %u Folders", this.fileCount, this.folderCount)>;
 
 typedef struct {
     char Magic[4] <comment="Reversed">;
-    uint Flags;
+    uint Flags <format=hex>;
     uint dataOffset <name="File Data Offset">;
     if (Flags & 2) {
         uint tableSizeDecompresed;
         uint tableSizeCompressed;
-        Warning("Table compression (Flag 2) detected. Offsets may be invalid in raw view.");
+        Warning("Table Compression (Flag 2) detected, Offsets may be invalid in raw view!");
     }
 
     uint Unknown <format=hex>; 
@@ -96,7 +96,6 @@ typedef struct {
     FSeek(rootNameOffset);
     string rootName <name="Root Folder Name", comment="Empty">;
     FSeek(rootNamePosition);
-
     uint rootfolderContentOffset <name="Root Folder Content Offset">;
 } FKNL_HEADER;
 

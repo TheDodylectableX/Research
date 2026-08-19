@@ -1,77 +1,204 @@
-//---------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------------
 //--- 010 Editor Binary Template
 //
 //      File: SRM.bt
-//   Authors: Dodylectable, MuruCoder (Shader Research)
-//   Version: 1.0
-//   Purpose: Reverse engineering the Legacy of Kain: Soul Reaver I-II Remastered models
+//   Authors: Dodylectable, MuruCoder (SR I-II Shader Research), neptuwunium (Defiance Shader Research)
+//   Version: 2.0
+//   Purpose: Reverse engineering the Legacy of Kain SRI-II/Defiance Remastered models.
 //  Category: Models
 // File Mask: *.SRM
-//  ID Bytes: 53 52 4D 01
-//   History: 
-//---------------------------------------------------------------------------------------
+//  ID Bytes: 53 52 4D 01 | 53 52 4D 08
+//   History:
+//     2.0 - Merged the separate SRM.bt and SRM_Defiance.bt into template.
+//         - Reversed Defiance's 88-byte ShaderBuffer.: offset 0x00 holds the
+//         - Documented the winding order difference between the two games.
+//     1.0 - Initial separate templates.
+//-------------------------------------------------------------------------------------------------
 
 LittleEndian();
 #include "../Common.bt"
 
-typedef struct { // Thanks MuruCoder for figuring the shaders out
-    uint Type           <name="Shader Type">;
-    VEC4F Parameters    <name="Shader Parameters">;
-    uint OpaqueOffset   <name="Opaque Offset",   comment="This is the start of how many triangles that need to be rendered opaque">;
-    uint OpaqueLength   <name="Opaque Length",   comment="This is the length of how many triangles that need to be rendered opaque, Divide by 3">;
-    uint AlphaOffset    <name="Alpha Offset",    comment="This is the start of how many triangles that need to be rendered with alpha masking">;
-    uint AlphaLength    <name="Alpha Length",    comment="This is the length of how many triangles that need to be rendered with alpha masking, Divide by 3">;
-    uint AdditiveOffset <name="Additive Offset", comment="This is the start of how many triangles that need to be rendered additive">;
-    uint AdditiveLength <name="Additive Length", comment="This is the length of how many triangles that need to be rendered additive, Divide by 3">;
-} Shaders <name="Shaders">;
+//------------------------------------------------------------------------------
+// GAME DETECTION
+//------------------------------------------------------------------------------
+// Both games use the magic "SRM" followed by a version byte:
+//     0x01: Soul Reaver I-II Remastered
+//     0x08: Defiance Remastered
+// Peek it up front (without consuming) so every struct below can branch on it.
+//------------------------------------------------------------------------------
+
+local uchar g_SRMVersion <hidden=true> = ReadUByte(3);
+local uint  g_isDefiance <hidden=true> = (g_SRMVersion == 0x08);
+local uint  g_isSRX      <hidden=true> = (g_SRMVersion == 0x01);
+local uint  g_LODCounter <hidden=true> = 1;
+
+//--------------------------------------------------------------------------------------------------------------------
+// SHADERS
+//--------------------------------------------------------------------------------------------------------------------
+// Both games end a shader with the same six uints: Three (offset, length) pairs carving the index
+// buffer into opaque / alpha / additive runs. Offsets and lengths are in INDEX units so divide by
+// 3 to get triangle numbers.
+//
+// What sits in front of those six uints is where they part ways and it matters:
+//
+//   SR I-II : A VEC4F for shader parameters. Texturing is driven off the per-vertex MaterialIndex.
+//
+//   Defiance: An 88-byte buffer whose first field is actually the texture index. The shader is what binds
+//             the texture so the model carries one shader per submesh, The per-vertex MaterialIndex is still written
+//             and still agrees with the shader but the shader is the priority.
+//--------------------------------------------------------------------------------------------------------------------
 
 typedef struct {
-    char Magic[4]     <name="Magic">;
-    uint ShaderCount  <name="Shader Count">;
-    Shaders shaders[ShaderCount];
-    uint TextureCount <name="Texture Count", comment="The amount of textures used by the model">;
-} Header <name="Header", read=Str("Model Type: %s| %u Textures", this.Magic, this.TextureCount)>;
+    uint  textureIndex   <name="Texture Index",   comment="Index into the Textures table. THIS is what binds the texture.">;
+    uint  unknownA       <name="Unknown A",       comment="1 on the first four shaders of RAZIEL_1, 0 on the rest. Purpose unknown.">;
+    uint  unknownB       <name="Unknown B",       comment="Always 0 in observed samples.">;
+    uint  unknownC       <name="Unknown C",       comment="Always 0 in observed samples.">;
+    float unknownFloat   <name="Unknown Float",   comment="2.0 on ordinary shaders, 3.0 on the env-mapped ones. Likely a shader variant selector.">;
+    uint  Reserved0[4]   <name="Reserved",        comment="Always 0 in observed samples.">;
+    char  envMapName[16] <name="Environment Map", comment="Name of an environment/reflection map, e.g. 'envmap_test1'. Empty on most shaders.">;
+    uint  Reserved1[8]   <name="Reserved",        comment="Always 0 in observed samples.">;
+    uint  unknownD       <name="Unknown D",       comment="3/2/1/0 on the first four shaders of RAZIEL_1, 0 on the rest. Possibly a draw/sort order.">;
+} SRM_DEFIANCE_SHADER <name="Shader Buffer", read=Str("Texture #%u%s", this.textureIndex, this.envMapName[0] ? " (env-mapped)" : "")>;
+
+string ReadShader(struct SRM_SHADER &s) {
+    string result;
+    if (g_isDefiance) SPrintf(result, "Texture #%u | Opaque: %u | Alpha: %u | Additive: %u", s.Buffer.textureIndex, s.opaqueLength / 3, s.alphaLength / 3, s.additiveLength / 3);
+    else              SPrintf(result, "Type %u | Opaque: %u | Alpha: %u | Additive: %u", s.Type, s.opaqueLength / 3, s.alphaLength / 3, s.additiveLength / 3);
+    return result;
+}
 
 typedef struct {
-    char Texture[31]  <comment="Corresponds to a set of DDS files (diffuse / norm / spec and gloss) with the same name in TEX folder">;
-    ubyte TextureFlag <name="Texture Flag">;
-} Textures <name="Textures", read=Str("%s", this.Texture)>;
+    uint Type <name="Shader Type", comment="Always 2 on Defiance. Varies on Soul Reaver I-II.">;
+    if (g_isDefiance) SRM_DEFIANCE_SHADER Buffer;
+    else              VEC4F Parameters <name="Shader Parameters">;
+    uint opaqueOffset   <name="Opaque Offset",   comment="Start of the opaque run, in index units. Divide by 3 for the triangle number.">;
+    uint opaqueLength   <name="Opaque Length",   comment="Length of the opaque run, in index units. Divide by 3.">;
+    uint alphaOffset    <name="Alpha Offset",    comment="Start of the alpha-masked run, in index units. Divide by 3.">;
+    uint alphaLength    <name="Alpha Length",    comment="Length of the alpha-masked run, in index units. Divide by 3.">;
+    uint additiveOffset <name="Additive Offset", comment="Start of the additive run, in index units. Divide by 3.">;
+    uint additiveLength <name="Additive Length", comment="Length of the additive run, in index units. Divide by 3.">;
+} SRM_SHADER <read=ReadShader>;
 
-//---------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------------------
+// TEXTURES
+//------------------------------------------------------------------------------------------------------
+// Identical in both games. The name maps to a set of DDS files in the TEX folder (TEX_HD for Defiance)
+// Suffixed by role:
+//     _D: Diffuse (RGB) + Alpha (A)        | _N: Tangent Space Normal Map
+//     _S: Specular Color (RGB) + Gloss (A) | _E: Colored Emissive Map
+// SRI-II uses both BC5/7 formats for the textures, Defiance uses DXT1/5 instead.
+//------------------------------------------------------------------------------------------------------
 
-typedef struct { VEC3F Bone[4]; } BoneMatrices <name="Bone Matrices">;
-typedef struct { ubyte Unknown <comment="No idea what this is, but it goes from 0 to 1 only">; } BoneFlags <name="Bone Flags", read=Unknown>;
+typedef struct {
+    char  Texture[31] <comment="Corresponds to a set of DDS files (_D / _N / _S / _E) in the TEX folder.">;
+    ubyte textureFlag <name="Texture Flag", comment="7 on most textures, 15 on some alpha-blended sets.">;
+} SRM_TEXTURE <read=Str("%s", this.Texture)>;
+
+//-------------------------------------------------------------------------------------------------
+// SKELETON
+//-------------------------------------------------------------------------------------------------
+// Byte-identical between the two games. The matrix array is ALWAYS (BoneCount + 32) entries long
+// the 32 are a fixed base set and BoneCount counts only the EXTRA bones on top.
+//
+// The 4-byte skip after the matrices is a trailing -0.0 transform, present only when extra bones
+// exist. Because this block is identical across both games, an exporter can lift it verbatim from
+// a reference model of either game to preserve rig fidelity without decoding the matrix packing.
+//-------------------------------------------------------------------------------------------------
+
+typedef struct { VEC3F Bone[4]; } SRM_BONE_MATRIX <name="Bone Matrices">;
+typedef struct { ubyte Unknown <comment="Only ever 0 or 1.">; } SRM_BONE_FLAGS <name="Bone Flags", read=Unknown>;
+
+//-------------------------------------------------------------------------------------------------
+// VERTICES
+//-------------------------------------------------------------------------------------------------
+// Normals and tangents are stored UNSIGNED in both games: subtract 127, then normalize.
+//
+// The byte trailing the 3-byte tangent ("Constant" on SR I-II, the 4th component of Defiance's
+// VEC4UB) is NOT part of the tangent vector -- it only ever holds 0 or 2 in either game. It is
+// almost certainly a bitangent handedness flag.
+//
+// SR I-II packs its UVs as single BYTES either side of the bone weights, capping precision at
+// 1/255. Defiance upgraded to full floats and to 4 bone influences per vertex (up from 3).
+//-------------------------------------------------------------------------------------------------
 
 typedef struct {
     VEC3F Positions;
-    VEC3UB Tangents     <comment="Subtract 127 and normalize">;
-    ubyte Constant      <name="Constant", comment="No idea what this is">;
-    VEC3UB Normals      <comment="Subtract 127 and normalize">;
-    ubyte MaterialIndex <name="Material Index">;
-    VEC3UB Indices      <name="Bone Indices">;
-    ubyte U             <read=UByteToFloat>;
-    VEC3UB Weights      <name="Bone Weights">;
-    ubyte V             <read=UByteToFloat>;
-    FSkip(4); // Reserved
-} Vertices;
+    if (g_isDefiance) {
+        VEC4UB Tangents      <comment="XYZ: subtract 127 and normalize. W: 0 or 2, a handedness flag, NOT part of the vector.">;
+        VEC3UB Normals       <comment="Subtract 127 and normalize.">;
+        ubyte  materialIndex <name="Material Index", comment="0-BASED index into the Textures table. Agrees with the owning shader's TextureIndex.">;
+        VEC4UB Indices       <name="Bone Indices">;
+        VEC4UB Weights       <name="Bone Weights">;
+        VEC2F  UV;
+    } else {
+        VEC3UB Tangents      <comment="Subtract 127 and normalize.">;
+        ubyte  Constant      <name="Handedness Flag", comment="Only ever 0 or 2. Same field as Defiance's 4th tangent byte.">;
+        VEC3UB Normals       <comment="Subtract 127 and normalize.">;
+        ubyte  materialIndex <name="Material Index", comment="1-BASED index into the Textures table. Subtract 1 before indexing.">;
+        VEC3UB Indices       <name="Bone Indices">;
+        ubyte  U             <read=UByteToFloat>;
+        VEC3UB Weights       <name="Bone Weights">;
+        ubyte  V             <read=UByteToFloat>;
+        FSkip(4); // Reserved
+    }
+} SRM_VERTEX;
 
-typedef struct { VEC3US Triangles; } Triangles <name="Triangles">;
+//--------------------------------------------------------
+// TRIANGLES
+//--------------------------------------------------------
+// Winding order actually differs between both remasters:
+//   SRI-II: Stored clockwise. (i3 -> i1)
+//   Defiance: Stored counter-clockwise. (i1 -> i3)
+//--------------------------------------------------------
 
-//---------------------------------------------------------------------------------------
+typedef struct { VEC3US Triangles; } SRM_TRIANGLE <name="Triangles">;
+
+//---------------------------------------------------------------------------------------------------
+// MESH CHUNK
+//---------------------------------------------------------------------------------------------------
+// Defiance wraps this in a LOD array; Soul Reaver I-II has exactly one and no LOD header. The chunk
+// body itself is otherwise laid out the same way in both.
+//---------------------------------------------------------------------------------------------------
+
+struct MeshChunk;
+
+string ReadMeshChunk(MeshChunk &chunk) {
+    string result;
+    if (g_isDefiance) SPrintf(result, "LOD #%u | %u Vertices | %u Triangles | %u Shaders | %u Textures", chunk.chunkIndex, chunk.vertexCount, chunk.faceCount / 3, chunk.shaderCount, chunk.textureCount);
+    else              SPrintf(result, "%u Vertices | %u Triangles | %u Shaders | %u Textures", chunk.vertexCount, chunk.faceCount / 3, chunk.shaderCount, chunk.textureCount);
+    return result;
+}
+
+typedef struct {
+    local int chunkIndex <hidden=true> = g_LODCounter++;
+
+    uint shaderCount <name="Shader Count">;
+    if (shaderCount > 0) SRM_SHADER Shaders[shaderCount] <optimize=false>;
+
+    uint textureCount <name="Texture Count", comment="The amount of textures used by the model.">;
+    if (textureCount > 0) SRM_TEXTURE Textures[textureCount] <optimize=false>;
+
+    uint boneCount <name="Bone Count", comment="EXTRA bones only. The matrix array below is always this + 32.">;
+    SRM_BONE_MATRIX boneMatrices[boneCount + 32] <optimize=false>;
+    if (boneCount > 0) FSkip(4); // Trailing -0.0 transform, Only present when extra bones exist.
+    SRM_BONE_FLAGS boneFlags[128] <optimize=false>;
+
+    uint vertexCount <name="Vertex Count">;
+    uint faceCount   <name="Face Count", comment="In INDEX units. Divide by 3 for the triangle count.">;
+
+    if (vertexCount > 0) SRM_VERTEX   Vertices[vertexCount]    <optimize=false>;
+    if (faceCount > 0)   SRM_TRIANGLE Triangles[faceCount / 3] <optimize=false>;
+} MeshChunk <name="Mesh", read=ReadMeshChunk>;
+
+//-------------------------------------------------------------------------------------------------
 
 struct {
-    Header header;
-    if (header.TextureCount > 0) Textures textures[header.TextureCount];
+    char Magic[4] <name="Magic", comment="0x01: SRI-II | 0x08: Defiance.">;
+    if (g_isDefiance) {
+        uint  LODCount    <name="LOD Count">;
+        VEC4F BoundingBox <name="Bounding Box", comment="Purpose not fully confirmed. Center + Radius is a good guess but doesn't reproduce the shipped values exactly.">;
+        if (LODCount > 0) MeshChunk LODs[LODCount] <optimize=false>;
+    } else { MeshChunk Mesh; }
+} SRM <name="Legacy of Kain: Soul Reaver I-II | Defiance Remastered .SRM Model">;
 
-    uint BoneCount;
-    BoneMatrices bonematrices[BoneCount+32];
-    if (BoneCount > 0) FSkip(4);
-    BoneFlags boneflags[128];
-
-    uint VertexCount <name="Vertex Count">;
-    uint FaceCount   <name="Face Count", comment="Divide by 3 to get the actual count">;
-    if (VertexCount > 0) Vertices vertices[VertexCount] <name="Vertices", optimize=false>;
-    if (FaceCount > 0)   Triangles triangles[FaceCount / 3] <name="Triangles", optimize=false>;
-} SRM <name="Legacy of Kain: Soul Reaver I-II Remastered .SRM Model">;
-
-//---------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------------

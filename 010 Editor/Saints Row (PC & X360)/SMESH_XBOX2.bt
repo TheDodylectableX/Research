@@ -1,0 +1,253 @@
+//--------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: SMESH_XBOX2.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Saints Row's static (non-skinned) models
+//  Category: Models
+// File Mask: *.smesh_xbox2
+//  ID Bytes: 42 4B D0 0D
+//   History: 
+//--------------------------------------------------------------
+
+// Sister format to cmesh_xbox2 for non-skinned geometry. Same 'BK' / 0xD00D container family. Differences:
+//   - No bone remapping table and vertex stride is 32
+//   - Descriptor signature at D+0x10 is [00 stride 00 uvCount 00 02 00 00] (the 00 02 smesh marker vs cmesh's 00 03)
+//   - Multiple descriptors are separate MESH SECTIONS (pieces), not LODs
+// Everything else (header, pointer table, string table, sequential index + vertex buffer layout, 32-byte alignment, backward-chained submesh tables, tristrip index format with no 0xFFFF restart) is identical to cmesh.
+
+BigEndian();
+#include "../Common.bt"
+
+local int   sectionCount                <hidden=true> = 0;
+local int64 sectionDescriptorOffset[16] <hidden=true>;
+local int64 sectionSubMeshOffset[16]    <hidden=true>;
+local int64 sectionFaceOffset[16]       <hidden=true>;
+local int64 sectionVertexOffset[16]     <hidden=true>;
+local int   sectionVertexCount[16]      <hidden=true>;
+local int   sectionFaceCount[16]        <hidden=true>;
+local int   sectionVertexStride[16]     <hidden=true>;
+local int   sectionSubMeshCount[16]     <hidden=true>;
+local int   currentSection              <hidden=true>;
+
+//--------------------------------------------------------------
+
+typedef struct {
+    VEC3F  Positions;
+    VEC4SB Normals, Tangents;
+    VEC2SS UV1;
+    VEC2US UV2;
+    if (sectionVertexStride[currentSection] == 32) VEC2US UV3;
+    if (sectionVertexStride[currentSection] == 36) VEC2US UV3, UV4;
+} Vertex;
+
+typedef struct {
+    uint   faceOffset    <name="Face Offset",    comment="Relative Offset from the section's face buffer start">;
+    ushort faceCount     <name="Face Count",     comment="Tristrip face count">;
+    ushort materialIndex <name="Material Index", comment="Index into the material string table">;
+} Descriptor_Face <read=Str("Face Offset: %u | Face Count: %u | Material Index: %u", this.faceOffset, this.faceCount, this.materialIndex)>;
+
+typedef struct {
+    uint   Unknown <format=hex>;
+    uint   runtimeHeapPointer_VertexBuffer <name="X360 Runtime Heap Pointer (Vertex Buffer)", format=hex>;
+    uint   runtimeHeapPointer_FaceBuffer   <name="X360 Runtime Heap Pointer (Face Buffer)",   format=hex>;
+    ushort vertexCount                     <name="Vertex Count">;
+    ushort faceCount                       <name="Face Count">;
+    ushort vertexStride                    <name="Vertex Stride">;
+    ushort UVCount                         <name="UV Set Count">;
+    ushort meshTypeMarker                  <name="Mesh Type Marker", comment="Static: 2 | Skeletal: 3">;
+    FSkip(74); // Reserved
+    uint   runtimeHeapPointer1             <name="X360 Runtime Heap Pointer 1", format=hex>;
+    ushort embeddedStripBytes              <name="Embedded Strip Bytes">;
+    ushort meshCount_Primary               <name="Mesh Count (Primary)">;
+    FSkip(8); // Reserved
+    uint   runtimeHeapPointer2             <name="X360 Runtime Heap Pointer 2", format=hex>;
+    uint   runtimeHeapPointer3             <name="X360 Runtime Heap Pointer 3", format=hex>;
+    ushort meshCount_Secondary             <name="Mesh Count (Secondary)">;
+} Descriptor_Mesh <read=Str("Vertices: %u | Faces: %u | Stride: %u | UV Sets: %u", this.vertexCount, this.faceCount, this.vertexStride, this.UVCount)>;
+
+typedef struct {
+    local int subMeshCount <hidden=true> = sectionSubMeshCount[currentSection];
+    local int vertexCount  <hidden=true> = sectionVertexCount[currentSection];
+    local int faceCount    <hidden=true> = sectionFaceCount[currentSection];
+
+    FSeek(sectionSubMeshOffset[currentSection]);
+    Descriptor_Face Submeshes[sectionSubMeshCount[currentSection]] <optimize=false>;
+
+    FSeek(sectionDescriptorOffset[currentSection]);
+    Descriptor_Mesh MeshDescriptor <name="Mesh Descriptor">;
+
+    FSeek(sectionFaceOffset[currentSection]);
+    ushort Faces[sectionFaceCount[currentSection]] <comment="Tristrips, No 0xFFFF restart">;
+
+    FSeek(sectionVertexOffset[currentSection]);
+    Vertex Vertices[sectionVertexCount[currentSection]] <optimize=false>;
+} Section <name="Section", read=Str("%u Meshes | %u Vertices | %u Faces", this.subMeshCount, this.vertexCount, this.faceCount)>;
+
+//--------------------------------------------------------------
+
+typedef struct {
+    char   Magic[4];
+    ushort Version;
+    FSkip(6);  // Reserved
+    ushort materialCount <name="Material Count">;
+    FSkip(6);  // Reserved
+    VEC4F  BoundingBox   <name="Bounding Box", comment="XYZ: Sphere | W: Radius">;
+    ushort runtimeHeapPointerTableOffset <name="X360 Runtime Heap Pointer Table Offset", comment="Static meshes leave this 0; the table is always at 0x40">;
+    FSkip(8);  // Reserved
+    ushort Unknown <format=hex>;
+    FSkip(16); // Reserved
+} SMESH_HEADER <read=Str("%sVersion %u | %u Materials", this.Magic, this.Version, this.materialCount)>;
+
+//--------------------------------------------------------------
+// SECTION RESOLVER
+// Function to keep the offset math out of the layout for tidiness
+// and readability reasons. Scans for every mesh descriptor by its
+// signature then derives the per-section vertex/face/submesh layout
+// and fills the global arrays.
+//
+//   Layout rules:
+//     - Descriptor signature at D+0x10: [00 stride 00 uvCount 00 02 00 00]
+//       where stride = 20 + uvCount*4 (uvCount 3 -> 32).
+//     - Submesh table sits just before D; Its true length is found by
+//       chaining 8-byte rows backward until the cumulative
+//       (faceOffset + faceCount) equals the descriptor's faceCount and
+//       the first row's offset is 0. (D+0x66 is only valid for section 0.)
+//     - Section 0 face buffer = First 0x1000 page after the runtime section
+//       holding a valid index run >= faceCount entries.
+//     - Section(n>0) face buffer = align32(previous section vertex end).
+//     - Vertex buffer = align32(face buffer + faceCount*2).
+//--------------------------------------------------------------
+
+void ResolveSections(int64 scanStart) {
+    local int   uvCount, stride;
+    local int64 sigOffset, descriptor;
+    local int   vCount, fCount, vStride, embBytes;
+    local int64 rowEnd, row;
+    local int   rowCount, rowBase, rowFaceCount, rowMaterial, chainEnd, chainFirstBase;
+    local int64 tableOffset;
+
+    //--- 1. Find every descriptor (section) by signature in file order
+    for (uvCount = 2; uvCount <= 4; uvCount++) {
+        stride = 20 + uvCount * 4;
+        for (sigOffset = scanStart; sigOffset < FileSize() - 8; sigOffset++) {
+            if (ReadByte(sigOffset)     == 0x00 && ReadByte(sigOffset + 1) == stride  &&
+                ReadByte(sigOffset + 2) == 0x00 && ReadByte(sigOffset + 3) == uvCount &&
+                ReadByte(sigOffset + 4) == 0x00 && ReadByte(sigOffset + 5) == 0x02    &&
+                ReadByte(sigOffset + 6) == 0x00 && ReadByte(sigOffset + 7) == 0x00) {
+
+                descriptor = sigOffset - 0x10;
+                vCount     = ReadUShort(descriptor + 0x0C);
+                fCount     = ReadUShort(descriptor + 0x0E);
+                vStride    = ReadUShort(descriptor + 0x10);
+                embBytes   = ReadUShort(descriptor + 0x64);
+                if (vCount <= 0 || fCount <= 0 || sectionCount >= 16) continue;
+
+                //--- 2. True submesh table: Chain 8-byte rows backward
+                tableOffset  = descriptor - 8; // Fallback (single row)
+                rowCount     = 0;
+                for (rowEnd  = descriptor; rowEnd >= descriptor - 8; rowEnd -= 8) {
+                    rowCount = 0; row = rowEnd - 8;
+                    chainEnd = -1; chainFirstBase = -1;
+                    while (row >= 0 && rowCount < 64) {
+                        rowBase      = ReadUInt(row);
+                        rowFaceCount = ReadUShort(row + 4);
+                        rowMaterial  = ReadUShort(row + 6);
+                        if (rowBase < fCount && rowFaceCount > 0 && rowFaceCount <= fCount &&
+                            rowMaterial < 256 && (rowBase + rowFaceCount) <= fCount) {
+                            if (chainEnd == -1) chainEnd = rowBase + rowFaceCount;
+                            chainFirstBase = rowBase;
+                            rowCount++; row -= 8;
+                        } else { break; }
+                    }
+                    if (rowCount > 0 && chainEnd == fCount && chainFirstBase == 0) {
+                        tableOffset = row + 8; // Row overshot by one
+                        break;
+                    }
+                }
+                if (rowCount == 0) {
+                    rowCount = ReadUShort(descriptor + 0x66);
+                    if (rowCount == 0) rowCount = ReadUShort(descriptor + 0x78);
+                    tableOffset = descriptor - rowCount * 8;
+                }
+
+                sectionDescriptorOffset[sectionCount] = descriptor;
+                sectionSubMeshOffset[sectionCount]    = tableOffset;
+                sectionVertexCount[sectionCount]      = vCount;
+                sectionFaceCount[sectionCount]        = fCount;
+                sectionVertexStride[sectionCount]     = vStride;
+                sectionSubMeshCount[sectionCount]     = rowCount;
+                // Embedded strip end (Runtime section end marker for this section)
+                sectionFaceOffset[sectionCount]       = descriptor + 0x7A + embBytes; // temp: EMB end
+                sectionCount++;
+            }
+        }
+    }
+    if (sectionCount == 0) return;
+
+    //--- 3. Locate section 0 face buffer: First 0x1000 page after the runtime section with a valid index run >= section 0 face count
+    local int64 runtimeEnd = sectionFaceOffset[sectionCount - 1]; // last EMB-strip end
+    local int64 page = (runtimeEnd + 0xFFF) & ~0xFFF;
+    local int64 cursor; local int run;
+    local int64 face0 = 0;
+    while (page < FileSize() - 4) {
+        if (ReadUShort(page) == 0 &&
+            ReadUShort(page + 2) < sectionVertexCount[0] &&
+            ReadUShort(page + 4) < sectionVertexCount[0]) {
+            run = 0; cursor = page;
+            while (cursor < FileSize() - 2 && ReadUShort(cursor) < sectionVertexCount[0]) { run++; cursor += 2; }
+            if (run >= sectionFaceCount[0]) { face0 = page; break; }
+        }
+        page += 0x1000;
+    }
+
+    //--- 4. Chain face/vertex buffers sequentially
+    local int   i;
+    local int64 facePos = face0;
+    local int64 vertPos, vertEnd;
+    for (i = 0; i < sectionCount; i++) {
+        vertPos = (facePos + sectionFaceCount[i] * 2 + 0x1F) & ~0x1F;
+        vertEnd = vertPos + sectionVertexCount[i] * sectionVertexStride[i];
+        sectionFaceOffset[i]   = facePos;
+        sectionVertexOffset[i] = vertPos;
+        facePos = (vertEnd + 0x1F) & ~0x1F;
+    }
+}
+
+//--------------------------------------------------------------
+
+struct {
+    SMESH_HEADER Header;
+
+    //--- Material runtime pointer table (always at 0x40 for static meshes)
+    FSeek(0x40);
+    uint materialPointerTable[Header.materialCount] <name="Material Runtime Heap Pointer Table", comment="Not file offsets", format=hex>;
+
+    //--- Material/Texture name string table
+    local int64 cursor <hidden=true> = 0x40 + Header.materialCount * 4;
+    while (cursor < FileSize() && ReadByte(cursor) == 0) cursor++;
+    local int64 stringTableStart <hidden=true> = cursor;
+    local int   nameIndex <hidden=true>;
+    for (nameIndex = 0; nameIndex < Header.materialCount; nameIndex++) {
+        while (cursor < FileSize() && ReadByte(cursor) != 0) cursor++;
+        cursor++; // Skip terminator
+    }
+    local int64 stringTableEnd <hidden=true> = cursor;
+    FSeek(stringTableStart);
+    byte stringTable[stringTableEnd - stringTableStart] <name="Material String Table", comment="Null-terminated texture/material names">;
+
+    //--- Resolve all section offsets up front (runtime section begins right after the strings)
+    ResolveSections(stringTableEnd);
+
+    //--- Runtime heap blob (everything between the string table and section 0 faces)
+    if (sectionCount > 0 && sectionFaceOffset[0] > stringTableEnd) {
+        FSeek(stringTableEnd);
+        byte runtimeSection[sectionFaceOffset[0] - stringTableEnd] <name="Runtime Data", comment="Opaque heap: linked-list nodes, submesh tables, descriptors, embedded strips">;
+    }
+
+    //--- Emit each section (nested: submeshes + descriptor + faces + vertices)
+    for (currentSection = 0; currentSection < sectionCount; currentSection++) Section sections;
+} SMESH <name="Volition Saints Row .SMESH_XBOX2 Static Model">;
+
+//--------------------------------------------------------------

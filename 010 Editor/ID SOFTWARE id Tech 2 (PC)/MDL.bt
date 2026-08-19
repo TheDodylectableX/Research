@@ -1,0 +1,94 @@
+//-------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: MDL.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering id Software's id Tech 2 models (Quake variant)
+//  Category: Models
+// File Mask: *.mdl
+//  ID Bytes: 49 44 50 4F
+//   History: 
+//-------------------------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+local int i <hidden=true>;
+
+//-------------------------------------------------------------------------------
+
+typedef struct {
+    char  Magic[4];
+    uint  Version;
+    VEC3F modelScale    <name="Model Scale">;
+    VEC3F modelOrigin   <name="Model Origin">;
+    float modelRadius   <name="Model Radius">;
+    VEC3F eyePosition   <name="Model Eye Position">;
+    uint  skinCount     <name="Skin Count">;
+    uint  skinWidth     <name="Skin Width">;
+    uint  skinHeight    <name="Skin Height">;
+    uint  vertexCount   <name="Vertex Count">;
+    uint  faceCount     <name="Face Count">;
+    uint  keyframeCount <name="Keyframe Count">;
+    uint  syncType      <name="Sync Type">;
+    uint  modelFlags    <name="Model Flags">;
+    float modelSize     <name="Model Size">;
+} MDL_HEADER <read=Str("%s Version %u | %u Skins - Dimensions: %ux%u | %u Vertices | %u Faces",
+                       this.Magic, this.Version, this.skinCount, this.skinWidth, this.skinHeight, this.vertexCount, this.faceCount)>;
+
+typedef struct (uint skinWidth, uint skinHeight) {
+    uint skinType <name="Skin Type", comment="0: Single | !0: Group">;
+
+    if (skinType == 0) { byte skinData[skinWidth * skinHeight] <optimize=false>; } 
+    else {
+        uint subSkinCount <name="Sub Skin Count">;
+        float timeDelays[subSkinCount]; 
+        struct SUBSKIN { byte skinData[skinWidth * skinHeight] <optimize=false>; } subSkins[subSkinCount] <optimize=false>;
+    }
+} MDL_SKIN;
+
+typedef struct {
+    uint onSeam <name="On Seam">;
+    VEC2SI ST;
+} MDL_TEXCOORD;
+
+typedef struct {
+    uint facesFront <name="Faces Front">;
+    VEC3SI Indices;
+} MDL_FACE;
+
+typedef struct {
+    VEC3UB Positions;
+    ubyte lightNormalIndex <name="Light Normal Index">;
+} MDL_VERTEX <read=Str("Positions: (%d, %d, %d) | Light Normal Index: %d", this.Positions.X, this.Positions.Y, this.Positions.Z, this.lightNormalIndex)>;
+
+typedef struct (int vertexCount) {
+    MDL_VERTEX bboxMin  <name="Bounding Box Minimum">;
+    MDL_VERTEX bboxMax  <name="Bounding Box Maximum">;
+    char frameName[16]  <name="Frame Name">;
+    MDL_VERTEX Vertices[vertexCount] <optimize=false>;
+} FRAME_DATA <read=frameName>;
+
+typedef struct (int vertexCount) {
+    uint frameType <name="Frame Type", comment="0: Single | !0: Group">;
+    if (frameType == 0) FRAME_DATA Frame(vertexCount);
+    else {
+        MDL_VERTEX groupBBoxMin <name="Group Bounding Box Minimum">;
+        MDL_VERTEX groupBBoxMax <name="Group Bounding Box Maximum">;
+        uint subFrameCount      <name="Sub Frame Count">;
+        float timeDelays[subFrameCount];
+        FRAME_DATA subFrames(vertexCount)[subFrameCount] <optimize=false>;
+    }
+} MDL_FRAME;
+
+//-------------------------------------------------------------------------------
+
+struct {
+    MDL_HEADER Header <name="Header">;
+    if (Header.skinCount > 0)     MDL_SKIN     Skins(Header.skinWidth, Header.skinHeight)[Header.skinCount] <name="Skins", optimize=false>;
+    if (Header.vertexCount > 0)   MDL_TEXCOORD TexCoords[Header.vertexCount]                                <name="Texture Coordinates", optimize=false>;
+    if (Header.faceCount > 0)     MDL_FACE     Faces[Header.faceCount]                                      <name="Faces", optimize=false>;
+    if (Header.keyframeCount > 0) MDL_FRAME    Frames(Header.vertexCount)[Header.keyframeCount]             <name="Frames", optimize=false>;
+} MDL <name="id Software id Tech 2 .MDL Model">;
+
+//-------------------------------------------------------------------------------

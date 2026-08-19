@@ -1,0 +1,162 @@
+//-----------------------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: DAT.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering the uncompressed archives from Daredevil: The Man Without Fear
+//  Category: Archives
+// File Mask: *.dat
+//  ID Bytes:
+//   History:
+//-----------------------------------------------------------------------------------------------
+
+// This format is a serialized resource loader I/O trace, It contains a flat list of opcodes that carry 32-bit PS2 RAM addresses of the file buffer it's operating on.
+
+LittleEndian();
+
+// -----------------------------------------------------------------------------------------------
+// Determine whether you want to read just the file listings (0) or every single opcode (1)
+// Warning: Reading every single opcode can reach over 100K nodes so stick to just file listings!
+// -----------------------------------------------------------------------------------------------
+local int FULL_MAP <hidden=true>  = 0;
+
+// ---- Named Constants ------------------------------------
+typedef enum <ubyte> {
+    OP_OPEN   = 0x80, // Pointer + null-terminated string. (Begin resource, records its path)
+    OP_S81    = 0x81, // Pointer + 32-bit unsigned integer value, Loader bookkeeping (Seek/Handle/Fixup)
+    OP_S82    = 0x82, // Pointer + 32-bit unsigned integer value, Loader bookkeeping; Most frequently used throughout the game files.
+    OP_BLK83  = 0x83, // Pointer + 16 bytes of data.
+    OP_DECL84 = 0x84, // Pointer + 32-bit unsigned integer value, Up-front size / allocation hint.
+    OP_DATA   = 0x85, // Pointer + Data Size + Data[Data Size].
+    OP_DECL86 = 0x86, // Pointer + Data Size (No Data Stored).
+    OP_MARK87 = 0x87, // Just a 32-bit unsigned integer value, Used as section marker or a return code.
+    OP_DATA89 = 0x89  // Pointer + Data Size + Alternative Data[Data Size], Similar to OP_DATA (0x85)
+} FFDAT_OPCODE;
+
+// Certain Opcodes: 0x80/0x85/0x86/0x89 (Reconstruction of TXD/DFF/World-BSP/PNG matches their internal size fields to the byte).
+// Roles of 0x81/0x82/0x83/0x84/0x87 are inferred from position/operands.
+
+const uint RW_VERSION   <hidden=true> = 0x1803FFFF; // RenderWare 3.6.0.3
+const uint PNG_MAGIC_LE <hidden=true> = 0x474E5089;
+
+//---------
+// Helpers
+//---------
+
+// Classify the first data payload of a resource (RenderWare / PNG / Raw Data).
+string ClassifyPayload(int64 firstData) {
+    if (firstData < 0) return "Empty";
+    local uint W = ReadUInt(firstData);
+    if (W == PNG_MAGIC_LE) return "PNG";
+    local uint renderWareVersion = ReadUInt(firstData + 8);
+    if (renderWareVersion == RW_VERSION) {
+        switch (W) {
+            case 0x01: return "rw:Struct";
+            case 0x0B: return "rw:World (BSP)";
+            case 0x0F: return "rw:Geometry";
+            case 0x10: return "rw:Clump (DFF)";
+            case 0x14: return "rw:Atomic";
+            case 0x15: return "rw:TextureNative";
+            case 0x16: return "rw:TextureDictionary (TXD)";
+            case 0x1A: return "rw:GeometryList";
+            case 0x1B: return "rw:Animation";
+            default:   return Str("rw:0x%X", W);
+        }
+    }
+    return "Raw Data";
+}
+
+//---------------------------------------------------------------------------------------
+// Resource Node (One per 0x80 OPEN; Consumes its body up to the next OPEN or until EoF)
+//---------------------------------------------------------------------------------------
+typedef struct {
+    FFDAT_OPCODE Tag            <hidden=true>; // Always OP_OPEN here
+    uint         runtimePointer <name="Runtime Pointer", comment="PS2 RAM destination buffer address", format=hex>;
+    string       Name           <comment="Resource path, Null-terminated">;
+
+    local uint  dataBytes   <hidden=true> = 0;  // Reconstructed size for this buffer only
+    local uint  dataCount   <hidden=true> = 0;  // Number of DATA reads counted
+    local uint  declSize    <hidden=true> = 0;  // Size hint from a DECL opcode if there's any
+    local int64 firstData   <hidden=true> = -1; // File offset of first counted payload
+    local uint  otherBytes  <hidden=true> = 0;  // Reads into a different buffer (object pack)
+    local ubyte T           <hidden=true>;
+    local uint  dataLength  <hidden=true> = 0, dataPointer <hidden=true> = 0;
+
+    while (FTell() < FileSize()) {
+        T = ReadUByte(FTell());
+        if (T == OP_OPEN) break;                            // next resource begins
+        else if (T == OP_DATA || T == OP_DATA89) {          // DATA: ptr + len + bytes
+            FSkip(1);
+            dataPointer = ReadUInt(); FSkip(4);             // dest buffer ptr
+            dataLength  = ReadUInt(); FSkip(4);             // len
+            // Only reads into THIS resource's own buffer are part of the file.
+            // Reads to another ptr belong to the interleaved object-pack stream.
+            if (dataPointer == runtimePointer) {
+                if (firstData < 0) firstData = FTell();
+                dataBytes += dataLength;  dataCount++;
+            } else { otherBytes += dataLength; }
+            FSkip(dataLength);                              // payload
+        }
+        else if (T == OP_DECL86 || T == OP_DECL84) {        // size decl: ptr + u32
+            FSkip(1 + 4);
+            declSize = ReadUInt(); FSkip(4);
+        }
+        else if (T == OP_S81 || T == OP_S82) { FSkip(9);  }
+        else if (T == OP_BLK83)              { FSkip(21); }
+        else if (T == OP_MARK87)             { FSkip(5);  }
+        else { Warning("Unknown FFDAT Opcode 0x%02X at 0x%LX - Stopping.", t, FTell()); break; }
+    }
+
+    // ---- Classify + Integrity Check (Display-only locals) ----
+    local string Kind      <hidden=true> = ClassifyPayload(firstData);
+    local string Integrity <hidden=true> = "";
+    // For a RenderWare payload the on-disk file is (chunkSize + 12) bytes.
+    if (Strstr(Kind, "rw:") == 0 && firstData >= 0) {
+        local uint rwSize <hidden=true> = ReadUInt(firstData + 4) + 12;
+        if      (rwSize == dataBytes) Integrity = " | Complete";
+        else if (dataBytes <  rwSize) Integrity = Str(" Truncated %u/%u", dataBytes, rwSize);
+        else                          Integrity = Str(" +%u Trailing", dataBytes - rwSize);
+    }
+} FFDAT_RESOURCE <read=Str("%s | %u bytes | %u reads | %s%s", this.Name, this.dataBytes, this.dataCount, this.Kind, this.Integrity)>;
+
+//------------------------------------------------------------------------------------------
+// Full Opcode Node (Only initialized when FULL_MAP is set to 1)
+//------------------------------------------------------------------------------------------
+typedef struct {
+    FFDAT_OPCODE Tag;
+    if      (Tag == OP_OPEN) { uint ptr <format=hex>; string name; }
+    else if (Tag == OP_DATA   || Tag == OP_DATA89) { uint Pointer <format=hex>; uint Size; if (len > 0) ubyte Data[Size]; }
+    else if (Tag == OP_DECL86 || Tag == OP_DECL84 || Tag == OP_S81 || Tag == OP_S82) { uint Pointer <format=hex>; uint Value; }
+    else if (Tag == OP_BLK83)  { uint Pointer <format=hex>; ubyte Data[16]; }
+    else if (Tag == OP_MARK87) { uint Value; }
+    else Warning("Bad FFDAT opcode 0x%02X at 0x%LX", Tag, FTell());
+} FFDAT_OP <read=Str("0x%02X", this.Tag)>;
+
+//-----------------------------------------------------------------------------------------------
+
+struct {
+    local ubyte lead          <hidden=true>;
+    local uint  leadSize      <hidden=true> = 0;
+    local uint  resourceCount <hidden=true> = 0;
+
+    if (FULL_MAP) { while (FTell() < FileSize()) { FFDAT_OP op; } }
+    else { // Skip any leading bookkeeping opcodes before the first OPEN (Defensive).
+        while (FTell() < FileSize() && ReadUByte(FTell()) != OP_OPEN) {
+            Lead = ReadUByte(FTell());
+            if      (Lead == OP_MARK87) FSkip(5);
+            else if (Lead == OP_BLK83)  FSkip(21);
+            else if (Lead == OP_S81  || Lead == OP_S82 || Lead == OP_DECL84 || Lead == OP_DECL86) FSkip(9);
+            else if (Lead == OP_DATA || Lead == OP_DATA89) { FSkip(5); leadSize = ReadUInt(); FSkip(4 + leadSize); }
+            else { Warning("Unexpected leading byte 0x%02X", lead); break; }
+        }
+
+        while (FTell() < FileSize() && ReadUByte(FTell()) == OP_OPEN) {
+            FFDAT_RESOURCE Resource;
+            resourceCount++;
+        }
+    }
+    if (!FULL_MAP && FTell() != FileSize()) Warning("Did not reach EOF (stopped at 0x%LX / 0x%LX). Opcode desync?", FTell(), FileSize());
+} DAT <name="Daredevil: Man Without Fear .DAT Uncompressed Archive">;
+
+//-----------------------------------------------------------------------------------------------

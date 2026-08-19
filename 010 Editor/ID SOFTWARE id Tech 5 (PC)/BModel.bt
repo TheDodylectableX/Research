@@ -23,17 +23,17 @@ typedef struct {
     VEC2F UV;
     VEC4UB Normals;
     VEC4UB Tangents;
-    uint vertexColor <name="Vertex Color", comment="RGBA Format in Linear Colorspace", format=hex>;
+    uint   vertexColor <name="Vertex Color", comment="RGBA Format in Linear Colorspace", format=hex>;
 } MD6_VERTEX;
 
 typedef struct {
     LittleEndian();
-    String materialPath    <name="Material Path">;
+    String materialPath      <name="Material Path">;
     BigEndian();
-    uint materialPathHash  <name="Material Path Index", format=hex>;
-    uint materialMeshIndex <name="Material Mesh Index">;
-    uint vertexStart       <name="Vertex Start">;
-    uint vertexEnd         <name="Vertex End">;
+    uint   materialHash      <name="Material Hash", format=hex>;
+    uint   materialMeshIndex <name="Material Mesh Index">;
+    uint   vertexStart       <name="Vertex Start">;
+    uint   vertexEnd         <name="Vertex End">;
 } MD6_MATERIAL <read=Str("%s | Vertex Start: %u | Vertex End: %u", this.materialPath.ActualString, this.vertexStart, this.vertexEnd)>;
 
 //-------------------------------------------------------------------------------------------
@@ -41,26 +41,26 @@ typedef struct {
 typedef struct {
     LittleEndian();
     char Magic[4];
-    time_t Timestamp <name="Model Timestamp">; // Could be model hash
+    uint modelHash          <name="Model Hash", format=hex>;
     BigEndian();
-    uint stringCount <name="String Count">;
+    uint stringCount        <name="String Count">;
     LittleEndian();
     if (stringCount > 0) String assetPath[stringCount] <name="Asset Path", optimize=false>;
     BigEndian();
-    VEC3F totalBoundingBox <name="Total Model Bounding Box">;
-    uint materialCount     <name="Material Count">;
+    VEC3F totalBoundingBox  <name="Total Model Bounding Box">;
+    uint  materialCount     <name="Material Count">;
 } MD6_HEADER <name="Header", read=Str("%u Meshes", this.materialCount)>;
 
 typedef struct {
-    MESH_FLAG subMeshFlag    <name="Submesh Flag">;
-    uint subMeshUnknown      <name="Submesh Unknown 1">;
-    uint vertexCount         <name="Vertex Count">;
-    uint faceCount           <name="Face Count">;
-    VEC3F meshBoundingBoxMin <name="Mesh Bounding Box Minimum">;
-    VEC3F meshBoundingBoxMax <name="Mesh Bounding Box Maximum">;
-    uint subMeshUnknown2     <name="Submesh Unknown 2">;
-    VEC3F meshBoundingBox    <name="Mesh Bounding Box">;
-    uint SubMeshUnknown3     <name="Submesh Unknown 3">;
+    MESH_FLAG subMeshFlag         <name="Submesh Flag", comment="Level geometry uses triangle list and props use tristrips">;
+    uint      subMeshUnknown      <name="Submesh Unknown 1">;
+    uint      vertexCount         <name="Vertex Count">;
+    uint      faceCount           <name="Face Count">;
+    VEC3F     meshBoundingBoxMin  <name="Mesh Bounding Box Minimum">;
+    VEC3F     meshBoundingBoxMax  <name="Mesh Bounding Box Maximum">;
+    uint      subMeshUnknown2     <name="Submesh Unknown 2">;
+    VEC3F     meshBoundingBox     <name="Mesh Bounding Box">;
+    uint      subMeshUnknown3     <name="Submesh Unknown 3">;
     
     if (vertexCount > 0) MD6_VERTEX Vertices [vertexCount] <optimize=false>;
     if (faceCount > 0) {
@@ -68,7 +68,7 @@ typedef struct {
         else if (subMeshFlag == USE_TRIANGLELIST) VEC3US Faces[faceCount / 3] <comment="Triangle List",  optimize=false>;
     }
 
-    uint footerData[7]  <name="Footer Data">;
+    uint footerData[7]  <name="Footer Data", format=hex>;
     char footerMagic[4] <name="Footer Magic">;
 } MD6_MESH <read=Str("Vertex Count: %u | Face Count: %u", this.vertexCount, this.faceCount)>;
 

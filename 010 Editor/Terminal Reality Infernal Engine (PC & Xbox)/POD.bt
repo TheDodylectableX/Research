@@ -76,7 +76,7 @@ typedef struct { // We peek at the first 3 bytes without declaring the magic yet
         local uint entrySize         <hidden=true> = 40;
         local uint fileTableOffset   <hidden=true> = 84; 
         local uint stringTableOffset <hidden=true> = 0;      // Doesn't exist.
-        local string Magic           <hidden=true> = "POD1"; // It doesn't exist, I just put it for aesthetic reasons lol.
+        local string Magic           <hidden=true> = "POD1"; // Doesn't exist, I just put it for aesthetic reasons lol.
     }
 } POD_HEADER <read=Str("%s Archive | %u Files | ''%s''", this.Magic, this.fileCount, this.archiveDescription)>;
 
@@ -92,10 +92,10 @@ typedef struct (uint Version, uint stringTableStart, uint entrySize) {
         uint fileNameOffset <name="File Name Offset">;
         if (Version >= 5) uint fileSizeDisk <name="File Size (Compressed)">;
         else uint fileSizeDisk <name="File Size">;
-        uint fileOffset <name="File Offset">;
+        uint fileOffset        <name="File Offset">;
         
         if (Version >= 5) uint fileSizeUncompressed    <name="File Size (Uncompressed)">;
-        if (Version == 6) { COMPRESSION_FLAG fileFlags <name="Flags", format=hex>; FSkip(4); } // Reserved
+        if (Version == 6) { COMPRESSION_FLAG fileFlags <name="File Flags", format=hex>; FSkip(4); } // Reserved
         else if (Version < 5) FSkip(8); // Reserved
 
         local uint64 returnPosition <hidden=true> = FTell();

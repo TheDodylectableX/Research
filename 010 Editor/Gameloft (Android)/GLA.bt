@@ -1,4 +1,4 @@
-//---------------------------------------------------------
+//----------------------------------------------------------
 //--- 010 Editor Binary Template
 //
 //      File: GLA.bt
@@ -9,7 +9,7 @@
 // File Mask: *.GLA
 //  ID Bytes: 
 //   History: 
-//---------------------------------------------------------
+//----------------------------------------------------------
 
 BigEndian();
 
@@ -36,11 +36,11 @@ typedef struct {
     FSeek(currentPosition);
 } GLA_FILE <read=Str("%s | File Offset: %u | File Size: %u", this.fileName, this.fileOffset, this.fileSize)>;
 
-//---------------------------------------------------------
+//----------------------------------------------------------
 
 struct {
     GLA_HEADER Header;
     if (Header.fileCount > 0) GLA_FILE Files[Header.fileCount] <optimize=false>;
 } GLA <name="Gameloft .GLA Archive">;
 
-//---------------------------------------------------------
+//----------------------------------------------------------

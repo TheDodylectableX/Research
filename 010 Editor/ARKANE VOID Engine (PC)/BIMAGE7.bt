@@ -1,0 +1,89 @@
+//--------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: BIMAGE7.bt
+//   Authors: Dodylectable and tjoener
+//   Version: 1.0
+//   Purpose: Reverse engineering VOID Engine's image texture format (Dishonored 2 version)
+//  Category: Images / Textures
+// File Mask: *.bimage    | *.bimage7
+//  ID Bytes: 14 00 00 00 | 42 49 4D 18
+//   History: 
+//--------------------------------------------------------------------
+
+// Mip dimensions and embedded mip map count correspond to a BIMAGE7 if it has more than one mip
+// And uses external "bimage7_mip#" (0 to 3) files,
+// If it only has one mip and dimensions then it's in the same BIMAGE7.
+// Normal Maps are signed so the used compression is BC5S instead of BC5U.
+
+LittleEndian();
+
+typedef enum <uint> {
+    TYPE_2D    = 0,
+    TYPE_3D    = 1,
+    TYPE_CUBIC = 2
+} IMAGE_TYPE;
+
+typedef enum <uint> {
+    R8_UNORM           = 1,
+    R16_FLOAT          = 2,
+    R32_FLOAT          = 3,
+    R16_UNORM          = 4,
+    R32G32_FLOAT       = 6,
+    R8G8B8A8_UNORM     = 10,
+    R16G16B16A16_FLOAT = 11,
+    R32G32B32A32_FLOAT = 12,
+    BC1_UNORM          = 14,
+    BC3_UNORM          = 16,
+    BC4_UNORM          = 17,
+    BC5_SNORM          = 18,
+    BC6H_UF16          = 19,
+    BC7_UNORM          = 20
+} IMAGE_FORMAT;
+
+//--------------------------------------------------------------------
+
+typedef struct {
+    char         Magic[4]            <comment="Always BIM">;
+    uint         textureID           <name="Texture ID",             comment="Always 20">;
+    IMAGE_TYPE   textureType         <name="Texture Type",           comment="Either 2D, 3D or Cubic">;
+    IMAGE_FORMAT textureFormat       <name="Texture Format",         comment="Refer to the array of enums">;
+    uint         unknownA            <name="Unknown Header Value A", format=hex>;
+    uint         unknownB            <name="Unknown Header Value B", format=hex>;
+    uint         mipWidth            <name="Mip Width",              comment="Highest width value of the header's mip.">;
+    uint         mipHeight           <name="Mip Height",             comment="Highest height value of the header's mip.">;
+    uint         imageWidth          <name="Image Width",            comment="Highest width value of the image altogether, corresponds with _mip0.">;
+    uint         imageHeight         <name="Image Height",           comment="Highest height value of the image altogether, corresponds with _mip0.">;
+    uint         imageDepth          <name="Image Depth",            comment="The depth of the image.">;
+    uint         embeddedMipMapCount <name="Embedded Mip Map Count", comment="How many embedded mip maps in this image.">;
+    uint         mipMapCount         <name="Mip Map Count",          comment="How many mips are in the image.">;
+    uint         imageLevels         <name="Image Levels",           comment="How many levels are in the image.">;
+    ushort       unknownC            <name="Unknown Header Value C", format=hex>;
+    ushort       someSize            <name="Some Size",              comment="No idea what this is">;
+    ushort       unknownD            <name="Unknown Header Value D", format=hex>;
+} BIMAGE7_HEADER <read=Str("Texture ID: %u | Texture Type: %s | Texture Format: %s | Texture Dimensions: %ux%u | Texture Depth: %u | Texture Mip Map Count: %u",
+                           this.textureID, EnumToString(this.textureType), EnumToString(this.textureFormat), this.imageWidth, this.imageHeight, this.imageDepth, this.mipMapCount)>;
+
+typedef struct {
+    uint  sliceLevel       <name="Image Slice Level",       comment="Image Slice Level">;
+    uint  sliceDepthLevel  <name="Image Slice Depth Level", comment="Image Slice Depth Level">;
+    uint  sliceWidth       <name="Image Slice Width",       comment="Image Slice Width">;
+    uint  sliceHeight      <name="Image Slice Height",      comment="Image Slice Height">;
+    uint  sliceSize        <name="Image Slice Size",        comment="Image Slice Size">;
+    ubyte slice[sliceSize] <name="Image Slice Data",        comment="Image Slice Data">;
+} BIMAGE7_SLICE <name="Image Slice", read=Str("Slice Level: %u | Slice Depth Level: %u | Slice Dimensions: %ux%u | Slice Size: %u",
+                                              this.sliceLevel, this.sliceDepthLevel, this.sliceWidth, this.sliceHeight, this.sliceSize)>;
+
+//--------------------------------------------------------------------
+
+struct {
+    BIMAGE7_HEADER Header;
+    local int numSlices <hidden=true> = Header.embeddedMipMapCount;
+    switch(Header.textureType) {
+        case TYPE_3D:    numSlices *= header.Depth; break;
+        case TYPE_CUBIC: numSlices *= 6; break;
+    }
+    BIMAGE7_SLICE imageSlice[numSlices] <optimize=false>;
+} BIMAGE7 <name="Arkane Studios VOID Engine .BIMAGE7 Texture Header">;
+
+//--------------------------------------------------------------------

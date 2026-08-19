@@ -1,27 +1,28 @@
-//------------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------
 //--- 010 Editor Binary Template
 //
 //      File: MSH.bt
 //   Authors: Dodylectable
 //   Version: 1.0
-//   Purpose: Reverse engineering Tomb Raider: Angel of Darkness Remastered's static model format
+//   Purpose: Reverse engineering Tomb Raider: Angel of Darkness Remastered's static models
 //  Category: Models
 // File Mask: *.MSH
 //  ID Bytes: 
 //   History: 
-//------------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------
 
 LittleEndian();
 #include "../Common.bt"
 
 typedef struct {
-    uint fileSize      <name="File Size">;
+    uint   fileSize    <name="File Size">;
     uint64 Version;
     uint64 vertexCount <name="Vertex Count">;
     uint64 faceCount   <name="Face Count">;
     uint64 meshCount   <name="Mesh Count">;
     FSkip(16); // Offset | Pointer storage area for the engine
-} MSH_HEADER <read=Str("%u Meshes | %u Vertices | %u Faces | File Size: %u bytes", this.meshCount, this.vertexCount, this.faceCount / 3, this.fileSize)>;
+} MSH_HEADER <read=Str("%u Meshes | %u Vertices | %u Faces | File Size: %u bytes",
+                       this.meshCount, this.vertexCount, this.faceCount / 3, this.fileSize)>;
 
 typedef struct {
     VEC3F Positions;
@@ -29,7 +30,7 @@ typedef struct {
     VEC2F UV2;
     VEC4UB Normals;
     VEC4UB Tangents;
-    VEC4UB PackedData; // No idea what this is but it's not Vertex Color
+    VEC4UB PackedData <comment="No idea what this is but it's not Vertex Color">;
 } MSH_VERTEX;
 
 typedef struct {
@@ -44,7 +45,7 @@ typedef struct {
     VEC4F  boundingBoxMax      <name="Mesh Bounding Box Maximum">;
 } MSH_MATERIAL;
 
-//------------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------
 
 struct {
     MSH_HEADER Header;
@@ -53,4 +54,4 @@ struct {
     if (Header.meshCount > 0)   MSH_MATERIAL Material[Header.meshCount] <optimize=false>;
 } MSH <name="Tomb Raider: Angel of Darkness Remastered .MSH Static Mesh">;
 
-//------------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------

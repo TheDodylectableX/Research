@@ -54,9 +54,12 @@ typedef struct {
     uint fileSize  <name="File Size", comment="Total archive size in bytes">;
     uint indexSize <name="File Listings Size", comment="Total bytes of the entry/index block">;
     uint namesSize <name="File Names Size", comment="Total bytes of the name block">;
+
     if (Version == SAINTS_ROW_2) uint extensionsSize <name="File Extensions Size", comment="Total bytes of the extension block">;
     else uint Unknown1 <format=hex>;
+
     uint archiveSizeUncompressed <name="File Size (Uncompressed)">; // Compressed on SR1
+
     if      (Version == SAINTS_ROW_2) { int  archiveSizeCompressed <name="File Size (Compressed)", comment="-1 = Uncompressed">; uint Unknown2[3] <format=hex>; }
     else if (Version == SAINTS_ROW)   { uint Unknown2 <format=hex>, Unknown3 <format=hex>; }
 } Header <name="Header", read=Str("Packfile 0x%X Version %u | File Size: %u bytes", this.Magic, this.Version, this.fileSize)>;

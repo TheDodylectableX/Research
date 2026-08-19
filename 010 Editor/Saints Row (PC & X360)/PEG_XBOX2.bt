@@ -64,8 +64,7 @@ typedef struct {
     // Advance the running cumulative offset for the next entry.
     previousNextOffset = (nextDataOffset != 0 ? nextDataOffset : previousNextOffset);
 } PEG_TEXTURE <read=Str("%s | Image Dimensions: %ux%u | Image Format: %s | Image Mip Map Count: %u | Image Offset: %u (%u bytes)",
-                        this.imageName, this.imageWidth, this.imageHeight, EnumToString(this.imageFormat),
-                        this.imageMipMapCount, this.texDataStart, this.imageSize)>;
+                        this.imageName, this.imageWidth, this.imageHeight, EnumToString(this.imageFormat), this.imageMipMapCount, this.texDataStart, this.imageSize)>;
 
 //----------------------------------------------------------------
 

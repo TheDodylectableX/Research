@@ -1,0 +1,1264 @@
+//---------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: MDL.bt
+//   Authors: Dodylectable
+//   Version: 5.0
+//   Purpose: Reverse engineering Dead Rising 2 and it's DLCs, 3 and 4's models.
+//  Category: Models
+// File Mask: *.mdl | *.big
+//  ID Bytes: 06 05 04 03 | 03 04 05 06
+//   History:
+//     5.0 - Dead Rising 2 stuff fully reversed + Dead Rising 3/4 per-submesh geometry views.
+//           * FileEntry is now base-parameterized and reused for nested archives (NestedEntry retired).
+//           * Nested archives are labelled with their real name (persistent.big / valuesets.big).
+//           * DR2 D3DVertexDesc identified as a D3D9 D3DVERTEXELEMENT9[i] array (8 bytes long records, DECL_END
+//             terminated) instead of DR3/DR4's 28 bytes D3D11_INPUT_ELEMENT_DESC. Drives everything else.
+//           * DR2 VBHeader / IBHeader identified as 52 bytes NAMED records (name[36] + sentinel + count +
+//             stride/format + reserved). The stride table is what makes multi-slot meshes decodable.
+//           * DR2 _ANIMLIB_SKELETON_ solved: 8 bytes header (uint version, ushort boneCount, ushort nameFlag),
+//             not the 16 byte DR3-ish header. Optional bone-name trailer.
+//           * DR2 CommandBuffer opcode grammar: 0x30 -> texture hash follows, 0x35 / 0x39 -> shader
+//             hash follows, 0x08 -> 7-word draw block. Validated on 59/59 command buffers.
+//           * DR2 rigid meshes (cars / props) are MULTI-SLOT: {12, 8, 44} + optional {12, 12} damage
+//             streams. Vertex decode is now stride-driven, no longer hardcoded to the skinned 56.
+//           * DR2 desc is 72 bytes with an 8-word lead (the generic (size-44)/4 rule mis-sizes it).
+//           * DR3/DR4 Submesh gains a Geometry view that slices the combined buffers.
+//     4.0 - Base DR2 support.
+//     3.0 - Dual game support for DR3/4 using if statements on locals.
+//     2.0 - Full DR4 parsing (D3D11_INPUT_ELEMENT_DESC, TRS bones, etc.).
+//-----------------------------------------------------------------------------------------------
+
+// Game differences (All automatically handled by code):
+//  * geometry          : DR2 per-mesh "geo_X Vertices N" (multi-slot) + "geo_X Indices 0" | DR3/DR4 shared "Combined Vertices N" / "Combined Indices 2"
+//  * primitive type    : DR2 TRIANGLE STRIPS with degenerate stitching (indexCount often not %3) | DR3/DR4 TRIANGLE LISTS
+//  * D3DVertexDesc     : DR2 D3DVERTEXELEMENT9[] (8B, D3D9) | DR3/DR4 D3D11_INPUT_ELEMENT_DESC[] (28B)
+//  * VBHeader/IBHeader : DR2 per-mesh, 52 bytes long named records | DR3/DR4 shared Combined_VBHeader / Combined_IBHeader
+//  * Combined_IBHeader : DR3 24 bytes (Adds reserved + 0xFFFFFFFF sentinel + reserved) | DR4 12 bytes
+//  * Combined_VBHeader : DR3 24 bytes entries | DR4 12 bytes entries
+//  * VDHeader          : DR2 8 bytes | DR3 16 bytes entries | DR4 8 bytes entries
+//  * RenderStrip       : DR2 28 bytes | DR3/DR4 36 bytes (MaskRenderStrip)
+//  * Cull descriptor   : DR2 "desc" 72 bytes (8-word lead) | DR3 "desc2" 76 bytes | DR4 "desc2" 68 bytes
+//  * MatTextureInfo    : DR3/DR4 16 bytes hash-only records | DR2 100B records w/ inline names
+//  * _ANIMLIB_SKELETON_: DR2 v1 (nested, 8 bytes long header) | DR3 v2 (16 bytes long header, bone-name trailer) | DR4 v4 (20 bytes long header)
+//  * SceneHeader       : Version 1 across all games. DR2/DR3 tiny 20 bytes | DR4 one large header w/ embedded names + AABB
+//  * Vertex Strides    : DR2 {56} skinned, {12, 8, 44} (+{12,12}) rigid | DR3 {32, 40, 44} | DR4 {32, 40} (+ skybox 4/8/12)
+//  * DR2 Only Assets   : UsedShaders.txt, _COLLPRIMS_, _ANIM_, _REV_ANIM_, LocatorArray, nested .big archives
+//
+// Dead Rising 2 uses a two-tier archive. The top-level .big holds the raw geometry, materials, scene names and shader list.
+//   The "render recipe" (skeleton, per-mesh vertex declarations, draw metadata,
+//   bounding box, Havok collision, locators) lives in a NESTED persistent.big sub-archive, which is the
+//   exact same container format with base-relative offsets. That is why none of it appears up top.
+//
+//   [Unmapped] Havok collision (COL_*Shape ConvexHull / hkCollisionShapeMesh / hkpMoppCode / WeldingInfo)
+//              inside DR2's persistent.big is left to the entry table; decoding it is its own project.
+
+// Byte Order: On disk the magic reads 06 05 04 03 on little endian (PC) builds and 03 04 05 06 on big
+// endian (X360) builds. Detect the first byte instead of all of it.
+if (ReadUByte(0) == 0x03) BigEndian(); else LittleEndian();
+
+#include "../Common.bt"
+local int   g_Game                  <hidden=true> = 4;  // 2 / 3 / 4, Automatically set in AssetPayload.
+local int   g_isDR3                 <hidden=true> = 0;  // Dialect flag (== g_Game 3), Automatically set in AssetPayload.
+local int64 g_persistentBase        <hidden=true> = -1; // Base of DR2's nested persistent.big, Automatically set in AssetPayload.
+local int   DECODE_GEOMETRY         <hidden=true> = 1;  // Set to 0 to skip the heavy typed decode of the index/vertex buffers.
+local int   DECODE_SUBMESH_GEOMETRY <hidden=true> = 1;  // Set to 0 to skip the DR3/DR4 per-submesh combined-buffer slices.
+
+//--------------
+// Enumerations
+//--------------
+
+typedef enum <uint> {
+    ASSET_CPU     = 4,   // Metadata / Command and descriptor data
+    ASSET_GPU     = 32,  // Vertex / Index buffers, etc.
+    ASSET_ARCHIVE = 256, // Embedded / Nested archive (Like persistent.big | valuesets.big in Dead Rising 2)
+    ASSET_BIGFILE = 2048 // Actual .big archive entry inside another .big (Dead Rising 2)
+} ASSET_TYPE;
+
+typedef enum <uint> {
+    UNCOMPRESSED    = 0,
+    COMPRESSED      = 1, // Saw it on PC, Dead Rising 2 specifically.
+    COMPRESSED_X360 = 2, // Saw it on the X360 DLCs, LZX most likely.
+} COMPRESSION_TYPE;
+
+// Vertex Element Semantic: The legacy D3D9 D3DDECLUSAGE enums.
+// Dead Rising 2 uses these literally (It's a D3D9 title). DR3 and DR4 keep the same numbering but convert them to D3D11 semantic strings at load time.
+typedef enum <uint> {
+    USAGE_POSITION     = 0,
+    USAGE_BLENDWEIGHT  = 1,
+    USAGE_BLENDINDICES = 2,
+    USAGE_NORMAL       = 3,
+    USAGE_PSIZE        = 4,
+    USAGE_TEXCOORD     = 5,
+    USAGE_TANGENT      = 6,
+    USAGE_BINORMAL     = 7,
+    USAGE_TESSFACTOR   = 8,
+    USAGE_POSITIONT    = 9,
+    USAGE_COLOR        = 10,
+    USAGE_FOG          = 11,
+    USAGE_DEPTH        = 12,
+    USAGE_SAMPLE       = 13
+} D3DDECLUSAGE;
+
+typedef enum <ubyte> { // Same as above but byte-wide for Dead Rising 2's packed D3DVERTEXELEMENT9 records.
+    U8_POSITION     = 0,
+    U8_BLENDWEIGHT  = 1,
+    U8_BLENDINDICES = 2,
+    U8_NORMAL       = 3,
+    U8_PSIZE        = 4,
+    U8_TEXCOORD     = 5,
+    U8_TANGENT      = 6,
+    U8_BINORMAL     = 7,
+    U8_TESSFACTOR   = 8,
+    U8_POSITIONT    = 9,
+    U8_COLOR        = 10,
+    U8_FOG          = 11,
+    U8_DEPTH        = 12,
+    U8_SAMPLE       = 13
+} D3DDECLUSAGE8;
+
+typedef enum <ubyte> { // D3DDECLTYPE: The D3D9 element data types (Dead Rising 2 only).
+    D3DDECLTYPE_FLOAT1    = 0,  // 4 bytes
+    D3DDECLTYPE_FLOAT2    = 1,  // 8 bytes
+    D3DDECLTYPE_FLOAT3    = 2,  // 12 bytes
+    D3DDECLTYPE_FLOAT4    = 3,  // 16 bytes
+    D3DDECLTYPE_D3DCOLOR  = 4,  // 4 bytes
+    D3DDECLTYPE_UBYTE4    = 5,  // 4 bytes
+    D3DDECLTYPE_SHORT2    = 6,  // 4 bytes
+    D3DDECLTYPE_SHORT4    = 7,  // 8 bytes
+    D3DDECLTYPE_UBYTE4N   = 8,  // 4 bytes
+    D3DDECLTYPE_SHORT2N   = 9,  // 4 bytes
+    D3DDECLTYPE_SHORT4N   = 10, // 8 bytes
+    D3DDECLTYPE_USHORT2N  = 11, // 4 bytes
+    D3DDECLTYPE_USHORT4N  = 12, // 8 bytes
+    D3DDECLTYPE_UDEC3     = 13, // 4 bytes
+    D3DDECLTYPE_DEC3N     = 14, // 4 bytes
+    D3DDECLTYPE_FLOAT16_2 = 15, // 4 bytes
+    D3DDECLTYPE_FLOAT16_4 = 16, // 8 bytes
+    D3DDECLTYPE_UNUSED    = 17  // D3DDECL_END Sentinel
+} D3DDECLTYPE;
+
+typedef enum <uint> { // Custom format enum to DXGI (DR3 / DR4).
+    FMT_R16_UINT           = 2,  // Used for Faces
+    FMT_R32G32B32_FLOAT    = 6,  // Used for Positions
+    FMT_R16G16B16A16_SNORM = 13, // Used for Normals (W=0) and Tangents (W=+/-1)
+    FMT_R8G8B8A8           = 30, // Used for Blend Weights(/255) and Blend Indices
+    FMT_R16G16_UNORM       = 37  // Used for UVs
+} VERTEX_FORMAT;
+
+typedef enum <uint> {
+    DEAD_RISING_2_SKELETON = 1,
+    DEAD_RISING_3_SKELETON = 2,
+    DEAD_RISING_4_SKELETON = 4
+} SKELETON_VERSION;
+
+//---------------------------------------------------------------------------
+// Container
+// Shared across Dead Rising 2, 3, 4 and self-similar for nested .big's in 2
+//---------------------------------------------------------------------------
+
+typedef struct {
+    uint Magic             <format=hex>;
+    uint dataStartOffset   <name="Data Start Offset", comment="Base-relative">;
+    uint fileSize          <name="File Size">;
+    uint fileCount         <name="File Count">;
+    uint Version;
+    uint stringTableOffset <name="String Table Offset", comment="Base-relative">;
+} Header <name="Header", read=Str("Archive Version %u | File Size: %u bytes | %u Assets", this.Version, this.fileSize, this.fileCount)>;
+
+// One 28-byte directory record. The only difference between a top-level entry and a nested
+// (.big-inside-.big) entry is that the offsets are relative to the sub-archive's base rather than to the file as a whole.
+// So instead of a duplicate NestedEntry struct we parameterize the base:
+// The top level passes 0 (making base-relative == absolute) and a nested archive passes its own start.
+// The absolute views are computed into locals, Which consume no bytes so the on-disk record stays exactly 28 bytes either way.
+typedef struct (int64 base) {
+    uint fileNameOffset           <name="File Name Offset", comment="Base Relative">;
+    uint fileHash                 <name="File Hash", format=hex>;
+    uint fileSizeCompressed       <name="File Size (Compressed)">;
+    uint fileSizeUncompressed     <name="File Size (Uncompressed)">;
+    uint fileOffset               <name="File Offset", comment="Base Relative">;
+    ASSET_TYPE fileType           <name="File Type">;
+    COMPRESSION_TYPE isCompressed <name="Is Compressed?">;
+
+    // Base-corrected resolutions (locals: they cost 0 bytes and freeze at parse time).
+    local int64  archiveBase <hidden=true>                    = base;
+    local int64  nameAddress <name="Name Address (Absolute)"> = base + fileNameOffset;
+    local int64  dataAddress <name="Data Address (Absolute)"> = base + fileOffset;
+    local string assetName   <name="Asset Name">              = ReadString(nameAddress);
+} FileEntry <name="File Entry", read=Str("%s | %u bytes | Asset Hash: 0x%08X | Asset Type: %s", assetName, fileSizeUncompressed, fileHash, EnumToString(fileType))>;
+
+typedef struct { string fileName <name="File Name">; } AssetName <name="Asset File Name", read=fileName>;
+
+// The directory itself. Wrapped in its own struct purely for the tree: Without it; every entry is spilled at the top level of the template results
+// which is unusable on a dense archive. Parameterized on the base for the same reason FileEntry is so the top level and the nested archives share one table type.
+typedef struct (uint count, int64 base) {
+    local uint assetCount <hidden=true> = count;
+    local int  e          <hidden=true>;
+    for (e = 0; e < count; e++) FileEntry entries(base);
+} FileEntryTable <name="File Entry Table", read=Str("%u Assets", assetCount)>;
+
+//--------------------------------------------------------------
+// Lookup helpers (resolve assets by name from the entry table)
+//--------------------------------------------------------------
+
+string GetName(int IDX) { return ReadString(MDL.entryTable.entries[IDX].fileNameOffset); }
+
+// Exact-name lookup to entry index. (or -1 if absent)
+int FindAsset(string NM) {
+    local int k;
+    for (k = 0; k < MDL.header.fileCount; k++)
+        if (Strcmp(GetName(k), NM) == 0) return k;
+    return -1;
+}
+
+// --- Nested Archive Lookups -------------------------------------------------
+// Every offset inside a nested archive is relative to "base" so these walk the sub-archive's own 28-byte directory.
+// Used to reach the data Dead Rising 2 buries in persistent.big and never exposes in the top-level entry table.
+
+int FindNestedIndex(int64 Base, string NM) {
+    local int   FC = ReadUInt(Base + 12);
+    local int   j;
+    local int64 EO;
+    for (j = 0; j < FC; j++) {
+        EO = Base + 0x18 + j * 28;
+        if (Strcmp(ReadString(Base + ReadUInt(EO)), NM) == 0) return j;
+    }
+    return -1;
+}
+
+int64 FindNestedOffset(int64 Base, string NM) {
+    local int j = FindNestedIndex(base, NM);
+    if (j < 0) return -1;
+    return Base + ReadUInt(Base + 0x18 + j * 28 + 16); // + fileOffset
+}
+
+uint FindNestedSize(int64 Base, string NM) {
+    local int j = FindNestedIndex(Base, NM);
+    if (j < 0) return 0;
+    return ReadUInt(Base + 0x18 + j * 28 + 12); // + fileSizeUncompressed
+}
+
+// --- DR2 Stride Table ---------------------------------------------
+// A mesh can bind anywhere from 1 to 5 vertex streams and the layout is per-mesh so the stride simply can't be assumed.
+// It's actually stored authoritatively in the nested "<mesh> VBHeader" (52 byte records, stride at +44) which also matches the mesh's D3DVERTEXELEMENT9 declaration exactly.
+// Returns 0 when unknown. (In which case the caller falls back to a raw dump rather than guessing)
+uint DR2SlotStride(string Prefix, int Slot) {
+    local string NM;
+    local int64  O;
+    local uint   Str;
+    if (g_persistentBase < 0) return 0;
+    SPrintf(NM, "%s VBHeader", Prefix);
+    O   = FindNestedOffset(g_persistentBase, NM);
+    Str = FindNestedSize(g_persistentBase, NM);
+    if (O < 0) return 0;
+    if ((Slot + 1) * 52 > Str) return 0;
+    return ReadUInt(O + Slot * 52 + 44);
+}
+
+// --- DR3/4 Combined Buffer Lookups -------------------------------
+int64 CombinedIBOffset() {
+    local int k;
+    for (k = 0; k < MDL.header.fileCount; k++)
+        if (Strstr(GetName(k), "Combined Indices") >= 0) return MDL.entryTable.entries[k].fileOffset;
+    return -1;
+}
+
+int64 CombinedVBOffset(uint Stride) {
+    local string NM;
+    local int    k;
+    SPrintf(NM, "Combined Vertices %u", Stride);
+    k = FindAsset(NM);
+    if (k < 0) return -1;
+    return MDL.entryTable.entries[k].fileOffset;
+}
+
+//-------------------------------------------------------------------------------
+// Combined Index/Vertex Buffer Headers (Dead Rising 3 / 4)
+// Dead Rising 3 pads the core fields with reserved padding and 0xFFFFFFFF bytes
+//-------------------------------------------------------------------------------
+
+typedef struct {
+    uint indexBufferHash <name="Index Buffer Hash", format=hex>;
+    if (g_isDR3) {
+        uint Reserved1;
+        uint Sentinel   <format=hex>;
+        uint indexCount <name="Index Count">;
+        VERTEX_FORMAT indexFormat <name="Index Format">;
+        uint Reserved2;
+    }
+    else {
+        uint indexCount <name="Index Count">;
+        VERTEX_FORMAT indexFormat <name="Index Format">;
+    }
+} Combined_IBHeader <name="Combined Index Buffer Header">;
+
+typedef struct {
+    uint vertexBufferHash <name="Vertex Buffer Hash", format=hex>;
+    if (g_isDR3) { uint Reserved1; uint Sentinel     <format=hex>; }
+    uint vertexCount  <name="Vertex Count">;
+    uint vertexStride <name="Vertex Stride">;
+    if (g_isDR3) uint Reserved2;
+} VBEntry <read=Str("Hash: 0x%08X | %u Vertices | Vertex Stride: %u (%u bytes)", vertexBufferHash, vertexCount, vertexStride, vertexCount*vertexStride)>;
+
+// One entry per distinct vertex stream. Entry size: 12 (DR4) or 24 (DR3).
+typedef struct (uint size) {
+    local int entrySize = g_isDR3 ? 24 : 12;
+    VBEntry   Stream[size / entrySize] <optimize=false>;
+} Combined_VBHeader <name="Combined Vertex Buffer Header">;
+
+//----------------------------------------------------------
+// Vertex Declaration (Dead Rising 3 / 4)
+// Serialized D3D11_INPUT_ELEMENT_DESC array, 28 bytes each
+//----------------------------------------------------------
+
+typedef struct {
+    D3DDECLUSAGE  Semantic;
+    uint          semanticIndex     <name="Semantic Index">;
+    VERTEX_FORMAT Format;
+    uint          inputSlot         <name="Input Slot",          comment="Which bound vertex buffer">;
+    uint          alignedByteOffset <name="Aligned Byte Offset", comment="Offset within the slot's stride">;
+    uint          inputSlotClass    <name="Input Slot Class",    comment="0 = Per-vertex">;
+    uint          instanceStepRate  <name="Instance Step Rate">;
+} InputElement <name="Input Element", read=Str("%s%u | Format: %s | Slot: %u | Offset: %u", EnumToString(Semantic), semanticIndex, EnumToString(Format), inputSlot, alignedByteOffset)>;
+
+typedef struct (uint size) { InputElement Element[size / 28] <optimize=false>; } D3DVertexDesc <name="Vertex Declaration (D3D11_INPUT_ELEMENT_DESC[])">;
+
+// One entry per D3DVertexDesc variant. Entry size is 8 bytes for DR4 or 16 bytes for DR3 (Which also adds reserved+sentinel fields).
+typedef struct {
+    uint elementCount   <name="Element Count">;
+    if (g_isDR3) uint Reserved;
+    uint vertexDeclarationHash <name="Vertex Declaration Hash", format=hex>;
+    if (g_isDR3) uint Sentinel <format=hex>;
+} VDEntry <read=Str("%u Elements | Hash: 0x%08X", elementCount, vertexDeclarationHash)>;
+
+typedef struct (uint size) {
+    local int entrySize = g_isDR3 ? 16 : 8;
+    VDEntry   entry[size / entrySize] <optimize=false>;
+} VDHeader <name="Vertex Declaration Header">;
+
+//-----------------------------------------------------------------------------
+// DR2 Vertex Declaration
+// Serialized D3DVERTEXELEMENT9 array: 8 bytes each. (Terminated by D3DDECL_END)
+// This is the authoritative description of a DR2 mesh's streams. Cross-checked against the VBHeader stride table on both a skinned character and a rigid car:
+//  Character: One stream   : Stride 56   -> POS f3 @0, UV f2 @12, WEIGHTS ub4 @20, INDICES ub4 @24, TANGENT f4 @28, NORMAL f3 @44
+//  Car/rigid: Three streams: {12, 8, 44} -> slot0 POS f3 | slot1 UV0 f2 | slot2 UV1 f2 + UV2 f2 + TANGENT f4 + NORMAL f3
+// Damageable panels bind two extra 12-byte streams (Slots 3 and 4) that the declaration doesn't cover: Same vertex count, float3 each. Almost certainly damage-deformation position targets.
+//-----------------------------------------------------------------------------
+
+typedef struct {
+    ushort         Stream     <name="Stream (Input Slot)", comment="0xFF = D3DDECL_END">;
+    ushort         Offset     <name="Offset in Stream">;
+    D3DDECLTYPE    Type       <name="Data Type">;
+    ubyte          Method     <name="Tessellator Method",  comment="0 = D3DDECLMETHOD_DEFAULT">;
+    D3DDECLUSAGE8  Usage      <name="Semantic">;
+    ubyte          usageIndex <name="Semantic Index">;
+} D3DVertexElement9 <read=Str("%s | Slot: %u | Offset: %u | %s%u", EnumToString(Type), Stream, Offset, EnumToString(Usage), usageIndex)>;
+
+typedef struct (uint size) { D3DVertexElement9 Element[size / 8] <optimize=false>; } D3DVertexDeclDR2 <name="Vertex Declaration (D3DVERTEXELEMENT9[])">;
+
+//----------------------------------------------------
+// Typed geometry decoders (Gated on DECODE_GEOMETRY)
+// All vertex buffers are interleaved within a stream.
+//----------------------------------------------------
+
+// R16_UINT Index Buffer ("Combined Indices 2" on DR3/DR4, "geo_X Indices 0" on DR2).
+// DR2 index buffers are triangle strips stitched with degenerate triangles (No 0xFFFF restart)
+// Which is why their index counts are frequently not divisible by 3. DR3/DR4 are triangle lists.
+typedef struct (uint size) { ushort Index[size / 2]; } IndexBuffer <name="Index Buffer">;
+
+// Triangle-list face.
+typedef struct { VEC3US Faces; } Triangle;
+
+// Stride 56: DR2 Skinned Characters.
+typedef struct {
+    VEC3F  Position;
+    VEC2F  UV;      // TEXCOORD0
+    VEC4UB Weights; // BLENDWEIGHT  (/255)
+    VEC4UB Indices; // BLENDINDICES
+    VEC4F  Tangents <comment="W = +/-1 Handedness">;
+    VEC3F  Normals;
+} VertexP56;
+
+// Stride 44: DR2 Rigid Slot 2:
+// NOT the same as DR3's stride-44 vertex below, Same size; Completely different layout so they get their own structs and are dispatched on the game.
+typedef struct {
+    VEC2F UV1      <comment="TEXCOORD1">;
+    VEC2F UV2      <comment="TEXCOORD2">;
+    VEC4F Tangents <comment="W = +/-1 Handedness">;
+    VEC3F Normals;
+} VertexP44_DR2;
+
+// Stride 44 (DR3): Like stride 40 but with a secondary UV map.
+typedef struct {
+    VEC3F  Position;
+    VEC2US UV1      <comment="UNORM16 -> /65535">; // TEXCOORD0
+    VEC2US UV2      <comment="UNORM16 -> /65535">; // TEXCOORD1
+    VEC4UB Weights;                                // BLENDWEIGHT
+    VEC4UB Indices;                                // BLENDINDICES
+    VEC4SS Tangents <comment="W = +/-1 Handedness">;
+    VEC4SS Normals  <comment="W = 0">;
+} VertexP44_DR3;
+
+// Stride 40 (DR3/4): Same as the above but only one UV map.
+typedef struct {
+    VEC3F  Position;
+    VEC2US UV       <comment="UNORM16 -> /65535">; // TEXCOORD
+    VEC4UB Weights;                                // BLENDWEIGHT
+    VEC4UB Indices;                                // BLENDINDICES
+    VEC4SS Tangents <comment="W = +/-1 Handedness">;
+    VEC4SS Normals  <comment="W = 0">;
+} VertexP40;
+
+// Stride 32 (DR3/4): Same as the above but no tangents stored.
+typedef struct {
+    VEC3F  Position;
+    VEC4SS Normals <comment="W = 0">;
+    VEC2US UV      <comment="UNORM16 -> /65535">; // TEXCOORD
+    VEC4UB Weights;                               // BLENDWEIGHT
+    VEC4UB Indices;                               // BLENDINDICES
+} VertexP32;
+
+// Stride 12: Position only stream. DR2 rigid slot 0 (and the damage slots 3/4); DR4 skybox.
+typedef struct { VEC3F Position; } VertexP12;
+
+// Stride 8: UV map only stream. DR2 rigid slot 1; DR4 skybox.
+typedef struct { VEC2F UV; } VertexP8;
+
+typedef struct (uint size) { VertexP56     Vertex[size / 56]; } VertexBufferP56     <name="Vertex Buffer (Stride 56)">;
+typedef struct (uint size) { VertexP44_DR2 Vertex[size / 44]; } VertexBufferP44_DR2 <name="Vertex Buffer (Stride 44, DR2 Rigid)">;
+typedef struct (uint size) { VertexP44_DR3 Vertex[size / 44]; } VertexBufferP44_DR3 <name="Vertex Buffer (Stride 44, DR3)">;
+typedef struct (uint size) { VertexP40     Vertex[size / 40]; } VertexBufferP40     <name="Vertex Buffer (Stride 40)">;
+typedef struct (uint size) { VertexP32     Vertex[size / 32]; } VertexBufferP32     <name="Vertex Buffer (Stride 32)">;
+typedef struct (uint size) { VertexP12     Vertex[size / 12]; } VertexBufferP12     <name="Vertex Buffer (Stride 12)">;
+typedef struct (uint size) { VertexP8      Vertex[size / 8];  } VertexBufferP8      <name="Vertex Buffer (Stride 8)">;
+
+// Generic stream: Raw rows of stride bytes for unknown layouts.
+typedef struct (uint Stride) { ubyte Data[Stride]; } VertexRow <read=Str("%u bytes", sizeof(this))>;
+typedef struct (uint Size, uint Stride) {
+    local int r <hidden=true>;
+    for (r = 0; r < Size / Stride; r++) VertexRow Row(Stride);
+} VertexStreamRaw <name="Vertex Buffer (Raw Rows)">;
+
+typedef struct (uint Size) { ubyte Data[Size] <format=hex>; } RawAsset <name="Raw Asset">;
+
+// UsedShaders.txt / _COLLISIONLIST2STRINGS_ / __STRING_STORAGE__: Plaintext data.
+typedef struct (uint Size) { char Text[Size] <name="Text">; } TextAsset <name="Text Asset">;
+
+// Single uint assets (TotalVBSize, TotalIBSize, _ATTRIBUTE_, NumLocatorArray).
+typedef struct { uint Value; } SimpleValue <read=Str("%u", this.Value)>;
+
+// Dispatches a DR22 vertex stream onto the right decoder for its stride. Called once per bound slot; "stride" comes from the mesh's nested VBHeader.
+typedef struct (uint Size, uint Stride, int Slot) {
+    local int  slotIndex  <hidden=true> = Slot;
+    local uint slotStride <hidden=true> = Stride;
+    if (!DECODE_GEOMETRY || stride == 0) { RawAsset rawData(Size); }
+    else if (Stride == 56) VertexBufferP56     Stream(Size); // Skinned character, all-in-one
+    else if (Stride == 44) VertexBufferP44_DR2 Stream(Size); // Rigid: UV1 + UV2 + tangent + normal
+    else if (Stride == 12) VertexBufferP12     Stream(Size); // Position (slot 0) / damage target (slots 3-4)
+    else if (Stride == 8)  VertexBufferP8      Stream(Size); // UV0
+    else                   VertexStreamRaw     Stream(Size, Stride);
+} VertexSlotDR2 <name="Vertex Stream", read=Str("Slot %u | Stride %u | %u bytes", slotIndex, slotStride, sizeof(this))>;
+
+//-------------------------------------------------------------
+// Command Buffer (Dead Rising 3 / 4)
+// GPU command stream terminated by a 44-byte draw descriptor.
+//-------------------------------------------------------------
+
+typedef struct {
+    ushort Marker             <comment="0x25 (37)">;
+    ubyte  vertexSize         <name="Vertex Size (Stride)", comment="Selects which Combined Vertices N buffer this mesh lives in">;
+    ubyte  Unknown1           <format=hex>;
+    uint   Unknown2           <format=hex, comment="0 or a per-stride bucket value. NOT the mesh's base vertex">;
+    uint   Unknown3           <format=hex>;
+    uint   startIndexLocation <name="Start Index Location", comment="Element offset into Combined Indices; Cumulative across meshes">;
+    uint   Constant           <name="Constant", comment="0x308 (776) on every mesh in every sample">;
+    uint   Pad[2];
+    uint   vertexCount        <name="Vertex Count">;
+    uint   Unknown4           <format=hex>;
+    uint   indexCount         <name="Index Count", comment="DrawIndexed IndexCount; Triangles = /3 (lists)">;
+    uint   drawConfig         <name="Draw Config">;
+} DrawDescriptor <name="Draw Descriptor", read=Str("Vertex Stride: %u | %u Vertices | %u Indices", vertexSize, vertexCount, indexCount)>;
+
+// The draw descriptor is the last 44 bytes of a per-mesh command buffer in DR3 and DR4-head.
+// The multi-slot skybox mesh instead needs a forward scan for the 0x25 marker. Prefer last-44, fall back to scanning for 0x25 + a plausible stride.
+int64 FindDrawMarker(int64 assetStart, uint Size) {
+    local int64 P  <hidden=true>;
+    local ubyte ST <hidden=true>;
+    P = assetStart + Size - 44;
+    if (P >= assetStart && ReadUShort(P) == 0x25) return P;
+    for (P = assetStart; P < assetStart + Size - 2; P++) {
+        if (ReadUShort(P) == 0x25) {
+            ST = ReadUByte(P + 2);
+            if ((ST % 4) == 0 && ST >= 4 && ST <= 64) return P;
+        }
+    }
+    return -1;
+}
+
+// Shared* passes carry more command/draw data after the first descriptor, Kept as trailing data.
+typedef struct (uint assetStart, uint Size) {
+    local int64 MK  <hidden=true> = FindDrawMarker(assetStart, Size);
+    local int64 Remaining <hidden=true>;
+    if (MK >= 0) {
+        if (MK > assetStart) ubyte commandStream[MK - assetStart] <name="Command Stream", comment="Bind opcodes (Grammar not fully enumerated)", format=hex>;
+        DrawDescriptor Draw;
+        Remaining = (assetStart + Size) - FTell();
+        if (Remaining > 0) ubyte Trailing[Remaining] <format=hex>;
+    } else { ubyte commandData[size] <comment="No 0x25 draw marker found", format=hex>; }
+} CommandBuffer <name="Command Buffer">;
+
+//------------------------------------------------------------------------------------------------------------------------------------
+// DR2 Command Buffer
+// A flat uint token stream. Low byte = Opcode, Upper 3 bytes = Argument.
+// Confirmed grammar::
+//   0x30: Bind texture. Argument = Sampler Slot. The next word is the texture hash, which resolves through MatTextureInfoArray.
+//   0x35: Bind shader (Pass 1). The next word is the shader hash, which resolves
+//   0x39: Bind shader (Pass 2). through UsedShaders.txt. (118/118 resolved)
+//   0x08: Draw. Followed by a 7-word draw block (see DrawDescriptorDR2).
+// Everything else (0x04, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x41, 0x43, 0x71, 0x73) is a single operand-less state token (Partial).
+// The walk never desyncs across any sample which is what gives confidence the operand rules are right.
+//------------------------------------------------------------------------------------------------------------------------------------
+
+// The label is built into a local rather than a custom read function because
+// A read function would have to take CmdToken by reference and therefore be declared after it, 010 resolves the (read=) name at definition time, Not lazily.
+typedef struct {
+    uint Token <format=hex>;
+    local uint   OPCODE   <hidden=true> = Token & 0xFF;
+    local uint   Argument <hidden=true> = Token >> 8;
+    local string Description <hidden=true>;
+
+    if (OPCODE == 0x30 || OPCODE == 0x35 || OPCODE == 0x39) uint ResourceHash <name="Resource Hash", comment="Texture hash (0x30) or Shader hash (0x35 / 0x39)", format=hex>;
+
+    if      (OPCODE == 0x30) SPrintf(Description, "0x30 BIND_TEXTURE | Slot %u -> 0x%08X", Argument & 0xFF, ResourceHash);
+    else if (OPCODE == 0x35) SPrintf(Description, "0x35 BIND_SHADER (Pass 1) -> 0x%08X", ResourceHash);
+    else if (OPCODE == 0x39) SPrintf(Description, "0x39 BIND_SHADER (Pass 2) -> 0x%08X", ResourceHash);
+    else                     SPrintf(Description, "0x%02X | Argument 0x%06X (Partial)", OPCODE, Argument);
+} CMDToken <read=Description>;
+
+typedef struct (int64 endPosition) { while (FTell() < endPosition) CMDToken Token; } CommandStreamDR2 <name="Command Stream">;
+
+// D3D9 DrawIndexedPrimitive parameters. The counts here are cross-checked against the mesh's VBHeader / IBHeader which is how the block was identified.
+typedef struct {
+    uint Marker      <name="Draw Marker", comment="Low Byte = 0x08", format=hex>;
+    uint baseVertex  <name="Base Vertex Index">;
+    uint minIndex    <name="Minimum Vertex Index">;
+    uint vertexCount <name="Vertex Count">;
+    uint startIndex  <name="Start Index">;
+    uint indexCount  <name="Index Count", comment="Tristrips, Degenerate-stitched.">;
+    uint drawFlags   <name="Draw Flags",  comment="Always one">;
+} DrawDescriptorDR2 <name="Draw Descriptor", read=Str("%u Vertices | %u Indices (Strip)", vertexCount, indexCount)>;
+
+// The draw block is 4 byte aligned inside the buffer; Locate it by opcode rather than by position because it doesn't sit at a fixed distance from the end on every mesh.
+int64 FindDrawOpDR2(int64 assetStart, uint Size) {
+    local int64 P <hidden=true>;
+    local uint  W <hidden=true>;
+    for (P = assetStart; P + 28 <= assetStart + Size; P += 4) {
+        W = ReadUInt(P);
+        if ((W & 0xFF) == 0x08 && (W >> 8) < 256) return P;
+    }
+    return -1;
+}
+
+typedef struct (int64 assetStart, uint Size) {
+    local int64 endPosition <hidden=true> = assetStart + Size;
+    local int64 MK          <hidden=true> = FindDrawOpDR2(assetStart, Size);
+    if (MK < 0) {
+        if (size > 0) ubyte commandData[Size] <comment="No 0x08 draw opcode found", format=hex>;
+    } else {
+        if (MK > assetStart) CommandStreamDR2 setupStream(MK) <name="Setup Commands">;
+        DrawDescriptorDR2 Draw;
+        if (FTell() < endPosition) CommandStreamDR2 passStream(endPosition) <name="Trailing Commands (Second Pass)">;
+    }
+} CommandBufferDR2 <name="Command Buffer (DR2)">;
+
+//------------------------------
+// Per-mesh descriptors (DR3/4)
+//------------------------------
+
+// 36-byte render strip; Assets hold an array of them (1 per pass/variant).
+typedef struct {
+    uint Strip          <comment="1">;
+    uint Unknown0       <format=hex>;
+    uint meshID         <name="Mesh ID">;
+    uint formatClassA   <name="Format Class A",   comment="Stride 40: 0x0204 | Stride 32: 0x0202 | Multi-Slot: 0x0200", format=hex>;
+    uint formatClassB   <name="Format Class B",   format=hex>;
+    uint usageMask      <name="Usage Mask",       format=hex>;
+    uint bonePaletteMax <name="Bone Palette Max", comment="Scales with skeleton">;
+    uint Unknown1       <format=hex>;
+    uint usedBones      <name="Used Bones">;
+} RenderStrip;
+
+typedef struct (uint Size) { RenderStrip Strip[Size / 36] <optimize=false>; } MaskRenderStrip <name="Mask Render Strip">;
+
+// Cull descriptor: Leading flags/counts then bounding sphere + AABB + tail.
+// Size-driven: 68 bytes on DR4, 76 bytes on DR3 (2 extra leading words).
+typedef struct (uint Size) {
+    local int Lead <hidden=true> = (Size - 44) / 4;
+    uint   header[Lead]       <name="Header", comment="Flags / Counts (8 uints in DR3 | 6 uints in DR4)">;
+    float  boundRadius        <name="Bounding Sphere Radius">;
+    VEC3F  boundingBoxMinimum <name="Bounding Box Minimum">;
+    VEC3F  boundingBoxMaximum <name="Bounding Box Maximum">;
+    VEC4UI Tail               <comment="T0, 1, 1, Pass/Material Index">;
+} Desc2 <name="Mesh Cull Descriptor">;
+
+//--------------------------------------
+// Per-mesh descriptors (Dead Rising 2)
+//--------------------------------------
+
+// 28 bytes, 7 words. Correlates with the leading words of "desc" (material / usage indices) [partial].
+typedef struct {
+    uint Strip         <comment="Pass or variant index [partial]">;
+    uint usageMask     <format=hex>;
+    uint Unknown0      <format=hex>;
+    uint materialIndex <name="Material Index", comment="Matches descriptor's lead words (Partial)">;
+    uint Unknown1      <format=hex>;
+    uint Unknown2      <format=hex>;
+    uint shaderIndex   <name="Shader/Pass Index", comment="Partial">;
+} RenderStripDR2 <name="Render Strip (DR2)", read=Str("Strip %u | Material %u", Strip, materialIndex)>;
+
+typedef struct (uint size) { RenderStripDR2 Strip[size / 28] <optimize=false>; } RenderStripArrayDR2 <name="Render Strip Array (DR2)">;
+
+// 72 bytes. NOTE the generic Desc2 rule ((size - 44) / 4 = 7 lead words) mis-sizes this by one word:
+// DR2 has EIGHT leading words and only a THREE-word tail. Confirmed by the AABBs coming out sane lol
+typedef struct {
+    uint  header[8]          <name="Header", comment="Flags / Counts / Material + Usage indices [Partial]">;
+    float boundRadius        <name="Bounding Sphere Radius">;
+    VEC3F boundingBoxMinimum <name="Bounding Box Minimum">;
+    VEC3F boundingBoxMaximum <name="Bounding Box Maximum">;
+    uint  Tail[3]            <comment="Always Zero">;
+} DescDR2 <name="Mesh Cull Descriptor (DR2)">;
+
+// 52-byte NAMED stream record. This is the table that makes DR2's variable multi-slot geometry decodable.
+// One record per bound vertex stream, each carrying its own count and stride.
+typedef struct {
+    char Name[36]     <name="Stream Name", comment="Example: geo_[meshName] 0 (Mesh + Slot)">;
+    uint Sentinel     <format=hex>;
+    uint vertexCount  <name="Vertex Count">;
+    uint vertexStride <name="Vertex Stride">;
+    uint Reserved;
+} VBEntryDR2 <read=Str("%s | %u Vertices | Stride %u (%u bytes)", Name, vertexCount, vertexStride, vertexCount * vertexStride)>;
+
+typedef struct (uint size) { VBEntryDR2 Stream[size / 52] <optimize=false>; } VBHeaderDR2 <name="Vertex Buffer Header (DR2)">;
+
+typedef struct {
+    char          Name[36]    <name="Buffer Name">;
+    uint          Sentinel    <format=hex>;
+    uint          indexCount  <name="Index Count">;
+    VERTEX_FORMAT indexFormat <name="Index Format">;
+    uint          Reserved;
+} IBHeaderDR2 <name="Index Buffer Header (DR2)", read=Str("%s | %u Indices | %s", Name, indexCount, EnumToString(indexFormat))>;
+
+typedef struct { uint Reserved; uint Sentinel <format=hex>; } VDHeaderDR2 <name="Vertex Declaration Header (DR2)">;
+
+//------------------------------------------------------------------------
+// Submesh Group: Seek to and gather this mesh's asset types
+// DR3/4 Only. Slices the SHARED combined buffers down to just this mesh.
+//------------------------------------------------------------------------
+//
+// How the addressing actually works:
+//   * The draw descriptor's startIndexLocation is an ELEMENT offset into "Combined Indices 2".
+//     It's cumulative: Mesh N+1 starts exactly where mesh N's indexCount ended.
+//   * The index VALUES are ABSOLUTE into the per-stride "Combined Vertices <stride>" buffer and not mesh-local.
+//     Each mesh's vertices are a contiguous run whose base is min(index) -- and min(index) is always the mesh's FIRST index so we can read it in O(1) instead of scanning.
+//   * That makes the descriptor's other offset fields red herrings: "Constant776" is 0x308 on every mesh in every sample, and Unknown2 is 0 (or a per-stride bucket value), never a vertex base.
+//
+// To turn this into a mesh-local index list for an exporter; Subtract baseVertex from every index.
+// SPAN SAFETY: A struct mayn't finish before it started and this one deliberately seeks away from wherever the submesh left the cursor.
+// The catch is that the two games order the archive differently: DR4 lays the combined buffers down BEFORE the per-mesh CPU assets and DR3 puts them AFTER
+// So "seek away" means backwards on one game and forwards on the other. Rather than depend on that; The caller anchors the struct at MeshGeomStart()
+// (The lowest byte it will touch) and the struct parks the cursor on the highest byte it touched before closing. Positive span either way.
+//------------------------------------------------------------------------------------
+int64 MeshGeomStart(uint Stride, uint startIndex, uint indexCount, uint vertexCount) {
+    local int64 IBO        = CombinedIBOffset();
+    local int64 VBO        = CombinedVBOffset(Stride);
+    local int64 faceStart  = -1;
+    local int64 vertStart  = -1;
+    local uint  baseVertex = 0;
+
+    if (IBO >= 0 && indexCount > 0) {
+        faceStart  = IBO + startIndex * 2;
+        baseVertex = ReadUShort(faceStart);
+    }
+    if (VBO >= 0 && vertexCount > 0) vertStart = VBO + baseVertex * Stride;
+
+    if (faceStart < 0) return vertStart; // -1 when there is nothing to show either.
+    if (vertStart < 0) return faceStart;
+    return (faceStart < vertStart) ? faceStart : vertStart;
+}
+
+typedef struct (uint Stride, uint startIndex, uint indexCount, uint vertexCount) {
+    // A read= expression can only see MEMBERS (including locals), Never the struct's parameters so mirror them into locals. They cost no bytes and double as a readable summary in the tree.
+    local uint  meshStride  <name="Vertex Stride">  = Stride;
+    local uint  meshStart   <name="Start Index">    = startIndex;
+    local uint  meshIndices <name="Index Count">    = indexCount;
+    local uint  meshVerts   <name="Vertex Count">   = vertexCount;
+    local uint  meshTris    <name="Triangle Count"> = indexCount / 3;
+
+    local int64 IBO        <hidden=true> = CombinedIBOffset();
+    local int64 VBO        <hidden=true> = CombinedVBOffset(Stride);
+    local uint  baseVertex <name="Base Vertex", comment="== min(index); subtract from indices to make them mesh-local"> = 0;
+    local uint  VBSize     <hidden=true> = vertexCount * Stride;
+    local int64 tailEnd    <hidden=true> = 0;
+
+    if (IBO >= 0 && indexCount > 0) {
+        baseVertex = ReadUShort(IBO + startIndex * 2);
+        FSeek(IBO + startIndex * 2);
+        Triangle Face[indexCount / 3] <name="Faces", comment="Indices are ABSOLUTE into the combined vertex buffer">;
+        if ((indexCount % 3) != 0) ushort IndexTail[indexCount % 3] <comment="Non-triangle remainder [unexpected]">;
+        if (FTell() > tailEnd) tailEnd = FTell();
+    }
+    if (VBO >= 0 && vertexCount > 0) {
+        FSeek(VBO + baseVertex * Stride);
+        if      (Stride == 44) VertexBufferP44_DR3 Vertices(VBSize);
+        else if (Stride == 40) VertexBufferP40     Vertices(VBSize);
+        else if (Stride == 32) VertexBufferP32     Vertices(VBSize);
+        else if (Stride == 12) VertexBufferP12     Vertices(VBSize);
+        else if (Stride == 8)  VertexBufferP8      Vertices(VBSize);
+        else                   VertexStreamRaw     Vertices(VBSize, Stride);
+        if (FTell() > tailEnd) tailEnd = FTell();
+    }
+    if (tailEnd > 0) FSeek(tailEnd); // Close on the highest byte touched. Combined with the caller's anchor, The span is always >= 0.
+} MeshGeometry <name="Geometry", read=Str("%u Vertices | %u Indices (%u Triangles) | Stride %u", meshVerts, meshIndices, meshTris, meshStride)>;
+
+typedef struct (string Prefix) {
+    local string meshName <hidden=true> = Prefix;
+    local string NM       <hidden=true>;
+    local int    IDX      <hidden=true>;
+    local int    d        <hidden=true>;
+    local int    Slot     <hidden=true>;
+    local uint   Stride   <hidden=true>;
+    local int64  MK       <hidden=true>;
+    local int64  geoStart <hidden=true>;
+    local int64  tailEnd  <hidden=true> = 0; // Highest end among this mesh's OWN assets (see below).
+
+    if (g_Game == 2) {
+        // Dead Rising 2 keeps only the raw geometry blobs at the top level.
+        // The vertex declaration, render strip, command buffer, cull descriptor and bone data all live in the nested persistent.big instead and are decoded there (see NestedArchive).
+
+        // The stream count is per-mesh: Skinned Characters bind 1 (stride 56) | Rigid Props bind 3 (12, 8, 44) | Damageable Car Panels bind 5 (+12, 12).
+        // So walk slots until one is missing and take each slot's stride from the nested VBHeader rather than assuming.
+        for (Slot = 0; ; Slot++) {
+            SPrintf(MN, "%s Vertices %d", Prefix, Slot);
+            IDX = FindAsset(NM);
+            if (IDX < 0) break;
+            Stride = DR2SlotStride(Prefix, Slot);
+            FSeek(MDL.entryTable.entries[IDX].fileOffset);
+            VertexSlotDR2 vertexSlot(MDL.entryTable.entries[IDX].fileSizeUncompressed, Stride, Slot);
+            if (MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed > tailEnd) tailEnd = MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed;
+        }
+
+        SPrintf(NM, "%s Indices 0", Prefix); IDX = FindAsset(NM);
+        if (IDX >= 0) {
+            FSeek(MDL.entryTable.entries[IDX].fileOffset);
+            if (DECODE_GEOMETRY) IndexBuffer indexBuffer(MDL.entryTable.entries[IDX].fileSizeUncompressed) <comment="Triangle strip, degenerate-stitched">;
+            else                 RawAsset    rawIndices(MDL.entryTable.entries[IDX].fileSizeUncompressed);
+            if (MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed > tailEnd) tailEnd = MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed;
+        }
+    } else {
+        // Dead Rising 3 / 4: geometry lives in the shared combined buffers, So this group holds the per-mesh vertex declaration + strip + cull descriptor + command buffer
+        // Then a Geometry view that slices the combined buffers down to this mesh.
+        for (d = 0; ; d++) {
+            SPrintf(NM, "%s D3DVertexDesc %d", Prefix, d);
+            IDX = FindAsset(NM);
+            if (IDX < 0) break;
+            FSeek(MDL.entryTable.entries[IDX].fileOffset);
+            D3DVertexDesc vertexDesc(MDL.entryTable.entries[IDX].fileSizeUncompressed);
+            if (MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed > tailEnd) tailEnd = MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed;
+        }
+
+        SPrintf(NM, "%s VDHeader", Prefix); IDX = FindAsset(NM);
+        if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); VDHeader vdHeader(MDL.entryTable.entries[IDX].fileSizeUncompressed);
+            if (MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed > tailEnd) tailEnd = MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed; }
+
+        SPrintf(NM, "%s MaskRenderStrip", Prefix); IDX = FindAsset(NM);
+        if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); MaskRenderStrip maskRenderStrip(MDL.entryTable.entries[IDX].fileSizeUncompressed);
+            if (MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed > tailEnd) tailEnd = MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed; }
+
+        SPrintf(NM, "%s desc2", Prefix); IDX = FindAsset(NM);
+        if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); Desc2 desc2(MDL.entryTable.entries[IDX].fileSizeUncompressed);
+            if (MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed > tailEnd) tailEnd = MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed; }
+
+        SPrintf(NM, "%s CommandBuffer", Prefix); IDX = FindAsset(NM);
+        if (IDX >= 0) {
+            FSeek(MDL.entryTable.entries[IDX].fileOffset);
+            CommandBuffer commandBuffer(MDL.entryTable.entries[IDX].fileOffset, MDL.entryTable.entries[IDX].fileSizeUncompressed);
+            if (MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed > tailEnd) tailEnd = MDL.entryTable.entries[IDX].fileOffset + MDL.entryTable.entries[IDX].fileSizeUncompressed;
+
+            // Geometry view. Re-locate the draw descriptor rather than reaching into the (conditional) commandBuffer.draw member, so this still works when the marker had to be scanned for.
+            if (DECODE_SUBMESH_GEOMETRY && DECODE_GEOMETRY) {
+                MK = FindDrawMarker(MDL.entryTable.entries[IDX].fileOffset, MDL.entryTable.entries[IDX].fileSizeUncompressed);
+                // The skybox draws non-indexed (vertexCount == indexCount == 0); skip it.
+                if (MK >= 0 && ReadUInt(MK + 36) > 0) {
+                    // Anchor at the lowest byte the view will touch. On DR4 the combined buffers sit BEFORE the command buffer we are standing on, so without this the struct would end in front of where it started.
+                    geoStart = MeshGeomStart(ReadUByte(MK + 2), ReadUInt(MK + 12), ReadUInt(MK + 36), ReadUInt(MK + 28));
+                    if (geoStart >= 0) {
+                        FSeek(geoStart);
+                        MeshGeometry geometry(ReadUByte(MK + 2), ReadUInt(MK + 12), ReadUInt(MK + 36), ReadUInt(MK + 28));
+                    }
+                }
+            }
+        }
+    }
+
+    // The members above jump all over the file (the combined buffers sit near the start, the metadata near the end).
+    // 010 only cares that a struct does not FINISH before it STARTED, so park the cursor at the end of this mesh's own highest asset.
+    // Without this, a Geometry view that lands back in the combined buffers would leave the struct with a negative span ("ending position in front of the starting position").
+    if (tailEnd > 0) FSeek(tailEnd);
+} Submesh <name="Submesh", read=meshName>;
+
+//-------------------------------
+// Skeleton (_ANIMLIB_SKELETON_)
+//-------------------------------
+
+// 36-byte TRS bone: unit quaternion + translation + 8 packed flag bytes. Identical across DR2/3/4.
+typedef struct {
+    VEC4F Quaternion;
+    VEC3F Translation;
+    ubyte Flags[8] <comment="Packed Flags/IDs">;
+} BoneTransform;
+
+// The header is NOT the same width across games (Which is what made DR2 look like it was 8 bytes short of a valid parse for so long)
+//   DR2 (v1):  8 bytes -> uint version, ushort boneCount, ushort nameFlag
+//   DR3 (v2): 16 bytes -> uint version, uint boneCount, 4x ushort flags
+//   DR4 (v4): 20 bytes -> The DR3 header + A trailer-info word
+typedef struct (int64 assetStart, uint Size) {
+    SKELETON_VERSION Version;
+    local uint bones    <hidden=true> = 0;
+    local int  hasNames <hidden=true> = 0;
+
+    if (Version == DEAD_RISING_2_SKELETON) {
+        ushort boneCountDR2 <name="Bone Count">;
+        ushort nameFlag     <name="Bone Name Flag", comment="!= 0 => Null-terminated bone-name trailer">;
+        bones    = boneCountDR2;
+        hasNames = (nameFlag != 0);
+    } else {
+        uint   boneCount  <name="Bone Count">;
+        ushort boneFlags1 <format=hex>;
+        ushort boneFlags2 <format=hex>;
+        ushort null01     <comment="!= 0 => embedded bone-name block (DR4)">;
+        ushort null02;
+        if (Version >= 3) uint trailerInfo <format=hex, comment="DR4 only; High word = Trailer/end offset">;
+        bones    = boneCount;
+        hasNames = (Version <= 2 || null01 != 0);
+    }
+
+    if (bones > 0) {
+        BoneTransform Transforms[bones] <optimize=false>;
+        ubyte parentIndex[bones] <name="Parent Indices", comment="255: root">;
+    }
+
+    // Trailer: bone names when flagged; DR4-head instead has 24-byte records.
+    local int64 Remaining  <hidden=true> = (assetStart + Size) - FTell();
+    local int64 Remaining2 <hidden=true>;
+    local int   Bone       <hidden=true> = 0;
+    if (Remaining > 0) {
+        if (hasNames) {
+            while (FTell() < assetStart + Size && Bone < bones) {
+                struct { string Name; } boneName <read=Name>;
+                Bone++;
+            }
+            Remaining = (assetStart + Size) - FTell();
+            if (Remaining > 0) ubyte trailerPad[Remaining] <format=hex>;
+        } else { ubyte Trailer[Remaining] <format=hex, comment="24-byte records [Unmapped]">; }
+    }
+} AnimLibSkeleton <name="Skeleton", read=Str("Version %u | %u Bones", Version, bones)>;
+
+//-------------------------------------
+// Scene Header (and scene sub-assets)
+// Scene version is 1 across DR2/3/4
+//-------------------------------------
+
+typedef struct { char name[36] <name="Mesh Name">; } MeshName <read=name>;
+
+typedef struct (uint assetStart, uint Size) {
+    if (Size <= 32) {
+        // DR2 / DR3: tiny header (version, counts). The real scene data lives in the separate
+        // SceneDescription / _BOUNDINGBOX_ / _ATTRIBUTE_ (+ DR3 TextureNames / Total*Size) assets.
+        uint Version    <comment="Always 1">;
+        uint countA     <comment="Mesh / Group Count">;
+        uint countB;
+        uint meshCount  <name="Mesh Count", comment="Counts scene nodes (Which can exceed drawable meshes)">;
+        uint valueD     <format=hex>;
+        local int64 Remaining <hidden=true> = (assetStart + Size) - FTell();
+        if (Remaining > 0) ubyte Extra[Remaining] <format=hex>;
+    } else { // DR4: One large header with embedded mesh names + model AABB.
+        uint     Version              <comment="Always 1">;
+        uint     sceneHash            <name="Scene Hash", comment="Constant Tag: 0xB1680088 (Not Content)", format=hex>;
+        uint     meshCount            <name="Mesh Count">;
+        ushort   meshCountDup         <hidden=true>;
+        ushort   Unknown0             <format=hex>;
+        uint     Unknown1             <format=hex>;
+        MeshName meshNames[meshCount] <name="Mesh Names", comment="Scene/Draw Order", optimize=false>;
+        VEC3F    boundingBoxMinimum   <name="Model Bounding Box Minimum">;
+        VEC3F    boundingBoxMaximum   <name="Model Bounding Box Maximum">;
+        uint     meshCountDup2        <name="Mesh Count (Duplicated #2)">;
+        local int64 Remaining <hidden=true> = (assetStart + Size) - FTell();
+        if (Remaining > 0) ubyte Padding[Remaining] <format=hex>;
+    }
+} SceneHeader <name="Scene Header">;
+
+// DR2 / DR3: flat list of 36-byte mesh-name slots (scene/draw order).
+typedef struct (uint Size) { MeshName meshName[Size / 36] <name="Mesh Name", optimize=false>; } SceneDescription <name="Scene Description">;
+
+// Model-space bounding box (DR3 top-level asset / DR2 nested inside persistent.big).
+typedef struct {
+    VEC3F boundingBoxMinimum <name="Bounding Box Minimum">;
+    VEC3F boundingBoxMaximum <name="Bounding Box Maximum">;
+} BoundingBox <name="Bounding Box">;
+
+// DR3 Only: Texture-name string table. (Offset table + Null-terminated names)
+typedef struct (uint Size) {
+    uint   nameCount <name="Name Count">;
+    ushort nameOffset[nameCount-1] <name="Name Offsets", comment="Relative offsets into the name block">;
+    local int64 Remaining <hidden=true> = Size - 2 - nameCount * 2;
+    if (Remaining > 0) char Names[Remaining] <comment="Null-terminated">;
+} TextureNames <name="Texture Names", read=Str("%u Names", nameCount)>;
+
+//------------------------------------------------------------------------------------------------------------
+// Materials
+//  DR3/DR4: Texture 16 bytes hash-only, 40/44 bytes sampler and a separate parameter array.
+//  DR2    : Texture 100 bytes with inline names; parameters packed in MatArray; no sampler/parameter arrays.
+//------------------------------------------------------------------------------------------------------------
+
+typedef struct (uint Size) {
+    uint  materialCount <name="Material Count">;
+    if (Size > 4) ubyte Data[Size - 4] <format=hex, comment="Material hashes + packed (offset, count) binding ranges [partial]">;
+} MatArray <name="Material Array">;
+
+// DR3 / DR4: 16-byte hash-only texture binding.
+typedef struct {
+    ubyte Pad[8];
+    uint  textureHash <name="Texture Hash", format=hex>;
+    uint  Slot        <name="Slot Register">;
+} MatTextureInfo <read=Str("Hash: 0x%08X | Slot: %u", textureHash, Slot)>;
+
+typedef struct (uint Size) { MatTextureInfo Texture[Size / 16] <optimize=false>; } MatTextureInfoArray <name="Material Texture Info Array">;
+
+// DR2: 100 byte record carrying the texture name inline + its hash + flags.
+// This is the table that resolves the texture hashes the DR2 command buffer's 0x30 opcodes bind.
+typedef struct {
+    uint Index           <name="Texture Index">;
+    char textureName[52] <name="Texture Name">;
+    uint textureHash     <name="Texture Hash", format=hex>;
+    uint Parameters[10]  <comment="Slot / Usage Flags (Partial)", format=hex>;
+} MatTextureInfoDR2 <read=Str("%u | %s | Hash: 0x%08X", Index, textureName, textureHash)>;
+
+typedef struct (uint Size) { MatTextureInfoDR2 Texture[Size / 100] <optimize=false>; } MatTextureInfoArrayDR2 <name="Material Texture Info Array (DR2)">;
+
+// D3D11_SAMPLER_DESC-shaped record. DR3 is 40 bytes; DR4 appends a 0xFFFF sentinel + pad (44 bytes).
+typedef struct {
+    uint   Filter;
+    VEC3UI addressUVW    <name="Sampler Address (UVW)">;
+    uint   Unknown       <format=hex>;
+    float  mipLODBias    <name="Mip LOD Bias">;
+    VEC4F  samplerParams <name="Sampler Parameters">;
+    if (!g_isDR3) { ushort Sentinel <format=hex>; ushort Pad; }
+} SamplerDesc <name="Sampler Desc">;
+
+typedef struct (uint Size) {
+    local int   entrySize <hidden=true> = g_isDR3 ? 40 : 44;
+    SamplerDesc sampler[Size / entrySize] <optimize=false>;
+} MatSamplerInfoArray <name="Material Sampler Info Array">;
+
+// Interleaved { uint paramNameHash, float value(s) } cbuffer values; variable stride.
+typedef struct (uint Size) { uint Word[Size / 4] <comment="paramNameHash / float value (variable records)", format=hex>; } MatParameterArray <name="Material Parameter Array">;
+
+typedef struct {
+    uint lodCount <name="LOD Count", comment="0 in single-LOD assets [unconfirmed]">;
+    uint lodFlags <name="LOD Flags", comment="0 [unconfirmed]">;
+} LodHeader <name="LOD Header", read=Str("LOD Count: %u", this.lodCount)>;
+
+//-------------------------------
+// Dead Rising 2 Only Structures
+//-------------------------------
+
+// _COLLPRIMS_: 16-byte collision primitive (sphere center + radius). All-zero when unused [partial].
+typedef struct {
+    VEC3F Center <name="Center">;
+    float Radius <name="Radius">;
+} CollPrims <name="Collision Primitive", comment="Partial">;
+
+// LocatorArray: 52-byte attachment points (52 * NumLocatorArray == asset size on the car sample).
+// boneIndex indexes the skeleton, which is why the car's bone list carries LOC_lhand / LOC_rhand.
+typedef struct {
+    uint  boneIndex   <name="Bone Index", comment="Index into _ANIMLIB_SKELETON_">;
+    VEC3F Translation <name="Translation">;
+    VEC4F Quaternion  <name="Rotation">;
+    uint  Flags[5]    <comment="Partial", format=hex>;
+} Locator_DR2 <read=Str("Bone %u | (%.3f, %.3f, %.3f)", boneIndex, Translation.X, Translation.Y, Translation.Z)>;
+
+typedef struct (uint Size) { Locator_DR2 Locator[Size / 52] <optimize=false>; } LocatorArray <name="Locator Array">;
+
+//-----------------------------------------------------------------------------------------------------------------
+// Nested Archives (Example: DR2's persistent.big / valuesets.big)
+//
+// Same container format as the parent but every internal offset is relative to "base".
+// This is where DR2 stores other important data: The skeleton, The per-mesh vertex declarations and draw metadata
+// The model bounding box, The Havok collision meshes and the locator array.
+// None of it is visible in the top-level entry table which is why DR2 looked so much sparser than DR3/DR4.
+//-----------------------------------------------------------------------------------------------------------------
+
+// Per-mesh metadata group inside persistent.big. Mirrors the top-level Submesh, but for the half of
+// the mesh that DR2 stores down here.
+typedef struct (int64 Base, string Prefix) {
+    local string meshName <name="Mesh Name"> = Prefix;
+    local string NM       <hidden=true>;
+    local int64  O        <hidden=true>;
+    local uint   S        <hidden=true>;
+    local int64  tailEnd  <hidden=true> = 0;
+
+    SPrintf(NM, "%s D3DVertexDesc 0", Prefix);
+    O = FindNestedOffset(base, NM); S = FindNestedSize(Base, NM);
+    if (O >= 0) { FSeek(O); D3DVertexDeclDR2 vertexDeclaration(S); if (O + S > tailEnd) tailEnd = O + S; }
+
+    SPrintf(NM, "%s RenderStrip", Prefix);
+    O = FindNestedOffset(Base, NM); S = FindNestedSize(Base, NM);
+    if (O >= 0) { FSeek(O); RenderStripArrayDR2 renderStrip(S); if (O + S > tailEnd) tailEnd = O + S; }
+
+    SPrintf(NM, "%s CommandBuffer", Prefix);
+    O = FindNestedOffset(Base, NM); S = FindNestedSize(Base, NM);
+    if (O >= 0) { FSeek(O); CommandBufferDR2 commandBuffer(O, S); if (O + S > tailEnd) tailEnd = O + S; }
+
+    SPrintf(NM, "%s VBHeader", Prefix);
+    O = FindNestedOffset(Base, NM); S = FindNestedSize(Base, NM);
+    if (O >= 0) { FSeek(O); VBHeaderDR2 VBHeader(S); if (O + S > tailEnd) tailEnd = O + S; }
+
+    SPrintf(NM, "%s VDHeader", Prefix);
+    O = FindNestedOffset(Base, NM); S = FindNestedSize(Base, NM);
+    if (O >= 0) { FSeek(O); VDHeaderDR2 vdHeader; if (O + S > tailEnd) tailEnd = O + S; }
+
+    SPrintf(NM, "%s IBHeader", Prefix);
+    O = FindNestedOffset(Base, NM); S = FindNestedSize(Base, NM);
+    if (O >= 0) { FSeek(O); IBHeaderDR2 IBHeader; if (O + S > tailEnd) tailEnd = O + S; }
+
+    SPrintf(NM, "%s desc", Prefix);
+    O = FindNestedOffset(Base, NM); S = FindNestedSize(Base, NM);
+    if (O >= 0) { FSeek(O); DescDR2 Descriptor; if (O + S > tailEnd) tailEnd = O + S; }
+
+    if (tailEnd > 0) FSeek(tailEnd);
+} NestedSubmesh <name="Submesh Metadata", read=meshName>;
+
+typedef struct (int64 Base, uint Size, string archiveName) {
+    local string nestedName <hidden=true> = archiveName;
+    local int    k          <hidden=true>;
+    local string NM         <hidden=true>;
+    local int64  O          <hidden=true>;
+    local uint   S          <hidden=true>;
+
+    Header header;
+    if (header.fileCount > 0) {
+        FSeek(Base + 0x18);
+        // Same 28-byte records and the same table type as the top level; only the base differs.
+        FileEntryTable entryTable(header.fileCount, Base);
+
+        FSeek(Base + header.stringTableOffset);
+        AssetName names[header.fileCount] <optimize=false>;
+
+        // ---- Global Nested Assets ----
+        O = FindNestedOffset(Base, "_ANIMLIB_SKELETON_"); S = FindNestedSize(base, "_ANIMLIB_SKELETON_");
+        if (O >= 0) { FSeek(O); AnimLibSkeleton skeleton(O, S); }
+
+        O = FindNestedOffset(Base, "_BOUNDINGBOX_");
+        if (O >= 0) { FSeek(O); BoundingBox boundingBox; }
+
+        O = FindNestedOffset(Base, "NumLocatorArray");
+        if (O >= 0) { FSeek(O); SimpleValue numLocators <name="Locator Count">; }
+
+        O = FindNestedOffset(Base, "LocatorArray"); S = FindNestedSize(base, "LocatorArray");
+        if (O >= 0 && S >= 52) { FSeek(O); LocatorArray locators(S); }
+
+        O = FindNestedOffset(Base, "_COLLISIONLIST2STRINGS_"); S = FindNestedSize(base, "_COLLISIONLIST2STRINGS_");
+        if (O >= 0 && S > 0) { FSeek(O); TextAsset collisionNames(S) <name="Collision List Strings">; }
+
+        O = FindNestedOffset(Base, "__STRING_STORAGE__"); S = FindNestedSize(base, "__STRING_STORAGE__");
+        if (O >= 0 && S > 0) { FSeek(O); TextAsset stringStorage(S) <name="String Storage">; }
+
+        // ---- Per-mesh metadata groups ----
+        // Anchored at each mesh's D3DVertexDesc, which is its lowest-addressed asset in this archive.
+        for (k = 0; k < header.fileCount; k++) {
+            NM = ReadString(Base + entryTable.entries[k].fileNameOffset);
+            if (Strstr(NM, " D3DVertexDesc 0") >= 0) {
+                FSeek(Base + entryTable.entries[k].fileOffset);
+                NestedSubmesh meshMetadata(base, SubStr(NM, 0, Strstr(NM, " D3DVertexDesc 0")));
+            }
+        }
+    }
+    // Park at the archive's end so the struct never finishes before it started.
+    FSeek(Base + Size);
+} NestedArchive <name="Nested .BIG Archive", read=nestedName>;
+
+//-----------------------------------------------------------------------
+// Asset Payload: Detect game then globals, shared passes and submeshes.
+//-----------------------------------------------------------------------
+
+typedef struct {
+    local int    IDX    <hidden=true>;
+    local int    k      <hidden=true>;
+    local string NM     <hidden=true>;
+    local uint   Offset <hidden=true>;
+    local uint   Size   <hidden=true>;
+    local int    Stride <hidden=true>;
+
+    // ---- Game detection ----
+    // DR2 has no combined buffers (per-mesh geometry); among the rest, DR3 ships a dedicated
+    // SceneDescription asset while DR4 folds the scene into one big SceneHeader.
+    // DR2 also has a SceneDescription, so the combined-buffer test has to come first.
+    if      (FindAsset("Combined_VBHeader") < 0) g_Game = 2;
+    else if (FindAsset("SceneDescription") >= 0) g_Game = 3;
+    else                                         g_Game = 4;
+    g_isDR3 = (g_Game == 3) ? 1 : 0;
+
+    // Resolve DR2's nested persistent.big up front: the top-level Submesh geometry decode needs its
+    // VBHeader stride table, and that lookup happens before the nested archive itself is parsed.
+    g_persistentBase = -1;
+    IDX = FindAsset("persistent.big");
+    if (IDX >= 0) g_persistentBase = MDL.entryTable.entries[IDX].fileOffset;
+
+    // ---- One-off / global assets ----
+    IDX = FindAsset("SceneHeader");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); SceneHeader sceneHeader(MDL.entryTable.entries[IDX].fileOffset, MDL.entryTable.entries[IDX].fileSizeUncompressed); }
+
+    IDX = FindAsset("SceneDescription");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); SceneDescription sceneDescription(MDL.entryTable.entries[IDX].fileSizeUncompressed); }
+
+    IDX = FindAsset("_BOUNDINGBOX_");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); BoundingBox boundingBox; }
+
+    IDX = FindAsset("_ATTRIBUTE_");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); SimpleValue Attribute; }
+
+    IDX = FindAsset("_ANIMLIB_SKELETON_");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); AnimLibSkeleton skeleton(MDL.entryTable.entries[IDX].fileOffset, MDL.entryTable.entries[IDX].fileSizeUncompressed); }
+
+    IDX = FindAsset("Combined_IBHeader");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); Combined_IBHeader ibHeader; }
+
+    IDX = FindAsset("Combined_VBHeader");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); Combined_VBHeader vbHeader(MDL.entryTable.entries[IDX].fileSizeUncompressed); }
+
+    IDX = FindAsset("TotalIBSize");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); SimpleValue totalIBSize <name="Total Index Buffer Size">; }
+
+    IDX = FindAsset("TotalVBSize");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); SimpleValue totalVBSize <name="Total Vertex Buffer Size">; }
+
+    IDX = FindAsset("LodHeader");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); LodHeader lodHeader; }
+
+    IDX = FindAsset("MatArray");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); MatArray matArray(MDL.entryTable.entries[IDX].fileSizeUncompressed); }
+
+    IDX = FindAsset("MatTextureInfoArray");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset);
+        if (g_Game == 2) MatTextureInfoArrayDR2 matTextures(MDL.entryTable.entries[IDX].fileSizeUncompressed);
+        else             MatTextureInfoArray    matTextures(MDL.entryTable.entries[IDX].fileSizeUncompressed); }
+
+    IDX = FindAsset("MatSamplerInfoArray");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); MatSamplerInfoArray matSamplers(MDL.entryTable.entries[IDX].fileSizeUncompressed); }
+
+    IDX = FindAsset("MatParameterArray");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); MatParameterArray matParameters(MDL.entryTable.entries[IDX].fileSizeUncompressed); }
+
+    IDX = FindAsset("TextureNames");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); TextureNames textureNames(MDL.entryTable.entries[IDX].fileSizeUncompressed); }
+
+    // ---- Dead Rising 2 Extras: Shader-name text, Collision, Locators, Embedded archives ----
+    IDX = FindAsset("UsedShaders.txt");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); TextAsset usedShaders(MDL.entryTable.entries[IDX].fileSizeUncompressed) <name="Used Shaders", comment="0xHASH : ShaderName; resolves the command buffer's 0x35 / 0x39 binds">; }
+
+    IDX = FindAsset("_COLLPRIMS_");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); CollPrims collPrims; }
+
+    IDX = FindAsset("NumLocatorArray");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); SimpleValue numLocators <name="Locator Count">; }
+
+    IDX = FindAsset("LocatorArray");
+    if (IDX >= 0 && MDL.entryTable.entries[IDX].fileSizeUncompressed >= 52) { FSeek(MDL.entryTable.entries[IDX].fileOffset); LocatorArray locators(MDL.entryTable.entries[IDX].fileSizeUncompressed); }
+
+    IDX = FindAsset("_ANIM_");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); RawAsset anim(MDL.entryTable.entries[IDX].fileSizeUncompressed) <name="Animation Data (Unmapped)">; }
+
+    IDX = FindAsset("_REV_ANIM_");
+    if (IDX >= 0) { FSeek(MDL.entryTable.entries[IDX].fileOffset); RawAsset revAnim(MDL.entryTable.entries[IDX].fileSizeUncompressed) <name="Reverse Animation Data (Unmapped)">; }
+
+    for (k = 0; k < MDL.header.fileCount; k++) {
+        if (MDL.entryTable.entries[k].fileType == ASSET_ARCHIVE) {
+            Offset = MDL.entryTable.entries[k].fileOffset; Size = MDL.entryTable.entries[k].fileSizeUncompressed;
+            FSeek(Offset);
+            NestedArchive nestedArchive(off, sz, GetName(k));
+        }
+    }
+
+    // ---- Combined geometry buffers (DR3 / DR4) ----
+    for (k = 0; k < MDL.header.fileCount; k++) {
+        NM = GetName(k); Offset = MDL.entryTable.entries[k].fileOffset; Size = MDL.entryTable.entries[k].fileSizeUncompressed;
+
+        if (Strstr(NM, "Combined Indices") >= 0) {
+            FSeek(Offset);
+            if (DECODE_GEOMETRY) IndexBuffer indexBuffer(Size); else RawAsset rawIndices(sz);
+        }
+        else if (Strstr(NM, "Combined Vertices") >= 0) {
+            Stride = Atoi(SubStr(NM, Strstr(NM, "Vertices ") + 9));
+            FSeek(Offset);
+            if (!DECODE_GEOMETRY)  RawAsset            rawVertices(Size);
+            else if (Stride == 44) VertexBufferP44_DR3 vertexBuffer44(Size);
+            else if (Stride == 40) VertexBufferP40     vertexBuffer40(Size);
+            else if (Stride == 32) VertexBufferP32     vertexBuffer32(Size);
+            else if (Stride == 12) VertexBufferP12     vertexBuffer12(Size);
+            else if (Stride == 8)  VertexBufferP8      vertexBuffer8(Size);
+            else                   VertexStreamRaw     vertexStream(Size, Stride);
+        }
+    }
+
+    // ---- Shared render-pass command lists ----
+    for (k = 0; k < MDL.header.fileCount; k++) {
+        NM = GetName(k);
+        if (Strstr(NM, "CommandBuffer") >= 0 && Strstr(NM, "Shared") >= 0) {
+            Offset = MDL.entryTable.entries[k].fileOffset; Size = MDL.entryTable.entries[k].fileSizeUncompressed;
+            FSeek(Offset);
+            CommandBuffer sharedPass(Offset, Size);
+        }
+    }
+
+    // ---- Per-submesh groups ----
+    if (g_Game == 2) {
+        // DR2: one group per "<prefix> Vertices 0". Anchor at that geometry blob (the mesh's
+        // lowest-offset asset) so the group does not start deep inside the nested archive we just
+        // walked, which would make its members span backwards.
+        for (k = 0; k < MDL.header.fileCount; k++) {
+            NM = GetName(k);
+            if (Strstr(NM, " Vertices 0") >= 0 && Strstr(NM, "Combined") < 0) {
+                FSeek(MDL.entryTable.entries[k].fileOffset);
+                Submesh submesh(SubStr(NM, 0, Strstr(NM, " Vertices 0")));
+            }
+        }
+    } else {
+        // DR3 / DR4: one group per "<prefix> CommandBuffer" (excluding Shared). Anchor at the mesh's
+        // D3DVertexDesc 0 (its lowest-offset own asset) rather than at the command buffer, since the
+        // group now also reaches back into the combined buffers for its Geometry view.
+        for (k = 0; k < MDL.header.fileCount; k++) {
+            NM = GetName(k);
+            if (Strstr(NM, "CommandBuffer") >= 0 && Strstr(NM, "Shared") < 0) {
+                NM = SubStr(NM, 0, Strstr(NM, " CommandBuffer"));
+                IDX = FindAsset(NM + " D3DVertexDesc 0");
+                if (IDX < 0) IDX = k;
+                FSeek(MDL.entryTable.entries[IDX].fileOffset);
+                Submesh submesh(NM);
+            }
+        }
+    }
+} AssetPayload <name="Asset Payload">;
+
+//---------------------------------------------------------
+
+struct {
+    Header header;
+    if (header.fileCount > 0) FileEntryTable entryTable(header.fileCount, 0); // Base 0 => Base Relative == Absolute
+    if (header.stringTableOffset > 0) {
+        FSeek(header.stringTableOffset);
+        AssetName names[header.fileCount] <optimize=false>;
+    }
+    if (header.fileCount > 0) AssetPayload Assets;
+} MDL <name="Dead Rising 2/3/4 .BIG | .MDL Model Archive">;
+
+//---------------------------------------------------------

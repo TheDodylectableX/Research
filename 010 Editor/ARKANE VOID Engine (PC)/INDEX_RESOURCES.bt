@@ -1,25 +1,29 @@
-//-----------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------
 //--- 010 Editor Binary Template
 //
 //      File: INDEX_RESOURCES.bt
 //   Authors: Dodylectable
 //   Version: 1.0
-//   Purpose: Reverse engineering DEATHLOOP's master_resources.index file list of all game files
+//   Purpose: Reverse engineering DEATHLOOP's master_resources.index file list format
 //  Category: Archives
 // File Mask: master_resources.index
 //  ID Bytes: 05 53 45 52
 //   History: 
-//-----------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------
 
 // .resources Archives are compressed with Oodle (Kraken)
-// Header data is stored in BE, The rest of the file is in LE
-// Archive Number corresponds to the order of archives in "master.index" file
+// Archive Number corresponds to the order of archives in the "master.index" file
 
 #include "../Common.bt"
 
+typedef enum <ubyte> {
+    INDEX     = 4,
+    RESOURCES = 5
+} INDEX_TYPE;
+
 // List of all archives part of the latest update
-string GetArchiveName(int id) {
-    switch(id) {
+string GetArchiveName(int ID) {
+    switch(ID) {
         case 0:   return "rsc_decl_0.resources";
         case 1:   return "rsc_gen_0_0.resources";
         case 2:   return "rsc_gen_0_1.resources";
@@ -137,46 +141,44 @@ string GetArchiveName(int id) {
 }
 
 // Output the right .resources besides the archive number
-string ReadArchiveListing(ushort &id) {
-    string s;
-    string name = GetArchiveName(id);
-
-    if (name != "")  { SPrintf(s, "%d: %s", id, name); } 
-    else { SPrintf(s, "%d: Unknown .resources Archive", id); }
-
-    return s;
+string ReadArchiveListing(ushort &ID) {
+    string S;
+    string Name = GetArchiveName(ID);
+    if (Name != "")  { SPrintf(S, "%d: %s", ID, Name); }
+    else { SPrintf(S, "%d: Unknown .resources Archive", ID); }
+    return S;
 }
 
 //-----------------------------------------------------------------------------------------------
 
 typedef struct {
     BigEndian();
-    ubyte INDEXType <name="INDEX Type", comment="4 = Index / 5 = Resources">;
-    char Magic[3]   <name="Magic", comment="Always SER">;
-    uint INDEXSize  <name="INDEX Size", comment="Size of this file minus 32 bytes">;
+    INDEX_TYPE INDEXType <name="INDEX Type", comment="4: Index | 5: Resources">;
+    char       Magic[3]  <name="Magic",      comment="Always SER">;
+    uint       INDEXSize <name="INDEX Size", comment="Size of this file minus 32 bytes">;
     FSkip(24); // Reserved
-    uint FileCount  <name="File Count">;
-} Header <name="Header", read=Str("INDEX Type: %d | INDEX Magic: %s | INDEX Size: %d | File Count: %d Files", this.INDEXType, this.Magic, this.INDEXSize, this.FileCount)>;
+    uint       fileCount <name="File Count">;
+} INDEX_HEADER <read=Str("INDEX Type: %d | INDEX Magic: %s | INDEX Size: %u bytes | File Count: %u Files", this.INDEXType, this.Magic, this.INDEXSize + 32, this.fileCount)>;
 
 typedef struct {
     LittleEndian();
-    uint ResourceIndex             <name="Resource Index">;
-    String ResourceType            <name="Resource Type">;
-    String ResourceListingUncooked <name="Resource Listing (Uncooked)",  comment="Uncooked file listing, Referenced in DECLs and the files themselves">;
-    String ResourceListingCooked   <name="Resource Listing (Cooked)",    comment="Cooked file listing, the file's actual path">;
-    uint64 ResourceOffset          <name="Resource Offset",              comment="Absolute">;
-    uint ResourceSizeUncompressed  <name="Resource Size (Uncompressed)">;
-    uint ResourceSizeCompressed    <name="Resource Size (Compressed)",   comment="Oodle (Kraken)">;
+    uint   resourceIndex            <name="Resource Index">;
+    String resourceType             <name="Resource Type">;
+    String resourceListingUncooked  <name="Resource Listing (Uncooked)",  comment="Uncooked file listing, Referenced in DECLs and the files themselves">;
+    String resourceListingCooked    <name="Resource Listing (Cooked)",    comment="Cooked file listing, the file's actual path">;
+    uint64 resourceOffset           <name="Resource Offset",              comment="Absolute">;
+    uint   resourceSizeUncompressed <name="Resource Size (Uncompressed)">;
+    uint   resourceSizeCompressed   <name="Resource Size (Compressed)",   comment="Oodle (Kraken)">;
     FSkip(12); // Reserved
-    ushort ArchiveIndex <read=ReadArchiveListing, name="Archive Number", comment="The number of the archive this file is stored in, corresponds to master.index' archive ordering">;
-} Files <name="File Entry", read=Str("%s | %s | File Offset: %u | File Size (Uncompressed): %u bytes",
-                                     this.ResourceType.ActualString, this.ResourceListingCooked.ActualString, this.ResourceOffset, this.ResourceSizeUncompressed)>;
+    ushort archiveIndex <read=ReadArchiveListing, name="Archive Number",  comment="The number of the archive this file is stored in, Corresponds to master.index' archive ordering">;
+} INDEX_ENTRY <name="File Entry", read=Str("ID: %u | %s | %s | File Offset: %u | File Size (Uncompressed): %u bytes",
+                                           this.resourceIndex, this.resourceType.ActualString, this.resourceListingCooked.ActualString, this.resourceOffset, this.resourceSizeUncompressed)>;
 
 //-----------------------------------------------------------------------------------------------
 
 struct {
-    Header header;
-    if (header.FileCount > 0) Files files[header.FileCount] <comment="INDEX File Listing", optimize=false>;
-} INDEX_VOID <name="Arkane Studios VOID Engine ''master_resources.index'' File">;
+    INDEX_HEADER Header;
+    if (Header.fileCount > 0) INDEX_ENTRY Entry[Header.fileCount] <comment="INDEX File Listing", optimize=false>;
+} INDEX_VOID <name="Arkane Studios VOID Engine master_resources.index File">;
 
 //-----------------------------------------------------------------------------------------------

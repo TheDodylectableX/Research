@@ -1,0 +1,64 @@
+//----------------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: BIMAGE.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering Wolfenstein: The New Order / Old Blood's textures
+//  Category: Images / Textures
+// File Mask: *.bimage
+//  ID Bytes: 09 4D 49 42
+//   History: 
+//----------------------------------------------------------------------------------
+
+BigEndian();
+
+typedef enum <uint> {
+    TYPE_2D    = 0,
+    TYPE_3D    = 1,
+    TYPE_CUBIC = 2
+} IMAGE_TYPE;
+
+typedef enum <uint> {
+    BC1 = 10,
+    BC3 = 11
+} IMAGE_FORMAT;
+
+//----------------------------------------------------------------------------------
+
+typedef struct {
+    uint         imageHash       <name="Image Hash", comment="Probably", format=hex>;
+    char         Magic[4]        <comment="Reversed">;
+    IMAGE_TYPE   imageType       <name="Image Type", format=hex>;
+    uint         imageWidth      <name="Image Width">;
+    uint         imageHeight     <name="Image Height">;
+    uint         imageDepthLevel <name="Image Depth Level">;
+    uint         mipMapCount     <name="Mip Map Count">;
+    uint         Unknown7        <format=hex>;
+    IMAGE_FORMAT imageFormat     <name="Image Format">;
+    uint         Unknown9        <format=hex>;
+    uint         Unknown10       <format=hex>;
+    uint         Unknown11       <format=hex>;
+    uint         Unknown12       <format=hex>;
+} BIMAGE_HEADER <read=Str("Texture Type: %s | Texture Format: %s | Texture Dimensions: %ux%u | Texture Depth Level: %u | Texture Mip Map Count: %u",
+                          EnumToString(this.imageType), EnumToString(this.imageFormat), this.imageWidth, this.imageHeight, this.imageDepthLevel, this.mipMapCount)>;
+
+typedef struct {
+    uint  mipIndex         <name="Mip Index">;
+    uint  mipDepthLevel    <name="Mip Depth Level">;
+    uint  mipWidth         <name="Mip Width">;
+    uint  mipHeight        <name="Mip Height">;
+    uint  mipSize          <name="Mip Size">;
+    ubyte mipData[mipSize] <name="Mip Data", optimize=false>;
+} BIMAGE_MIP <read=Str("Mip Index: %u | Mip Depth Level: %u | Mip Dimensions: %ux%u | Mip Size: %u bytes",
+                       this.mipIndex, this.mipDepthLevel, this.mipWidth, this.mipHeight, this.mipSize)>;
+
+//----------------------------------------------------------------------------------
+
+struct {
+    BIMAGE_HEADER Header;
+    if (Header.mipMapCount > 0) BIMAGE_MIP Mips[Header.mipMapCount] <optimize=false>;
+} BIMAGE <name="id Software id Tech 5 .BIMAGE Texture">;
+
+//----------------------------------------------------------------------------------
+

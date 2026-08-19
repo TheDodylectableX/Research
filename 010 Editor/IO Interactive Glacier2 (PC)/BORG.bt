@@ -1,0 +1,343 @@
+//--------------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: BORG.bt
+//   Authors: Dodylectable, Glacier 2 Modding Community
+//   Version: 1.0
+//   Purpose: Reverse engineering IO Interactive's Glacier 2 BoneRig format
+//  Category: Armatures / Skeletons
+// File Mask: *.BORG
+//  ID Bytes:
+//   History:
+//--------------------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+
+//---------------------------------------------------------------------------
+// GAME DETECTION: Set this manually before parsing!
+//---------------------------------------------------------------------------
+//   "HITMAN": Hitman Absolution / World of Assassination
+//   "007FL" : 007 First Light
+//---------------------------------------------------------------------------
+// Absolution uses the exact same layout as World of Assassination:
+//     Identical main header including the trailing uint64 boneMapOffset
+//     64 byte bone definitions with the name at +28, 32 byte SQV bind poses
+//     48 byte inverse-global matrices and ubyte constraint index fields.
+//---------------------------------------------------------------------------
+
+const string Game <hidden=true> = "007FL";
+
+//--------------
+// Enumerations
+//--------------
+
+// Two known kinds: Lookat is the "modern" pose constraint used heavily in Hitman.
+// Rotate is a twist-style constraint that 007FL uses for shoulder/elbow/femur twist bones.
+typedef enum <ubyte> {
+    NONE   = 0,
+    LOOKAT = 1,
+    ROTATE = 2
+} BONE_CONSTRAINT_TYPE_UBYTE;
+
+typedef enum <ushort> {
+    NONE_FL   = 0,
+    LOOKAT_FL = 1,
+    ROTATE_FL = 2
+} BONE_CONSTRAINT_TYPE_USHORT;
+
+//--------------------------------------------------------------------------
+
+//-----------------------------------------------------------------
+// Core per-bone records: Identical layout across Hitman and 007FL
+//-----------------------------------------------------------------
+
+// 64 bytes per bone. The name is a fixed 34 byte ASCII null padded slot.
+typedef struct {
+    VEC3F Center;
+    int   parentBoneIndex <name="Parent Bone Index", comment="Index of parent bone; -1 means root">;
+    VEC3F Size;
+    char  boneName[34]    <name="Bone Name", comment="Null padded ASCII name">;
+    short bodyPart        <name="Body Part", comment="Logical body region tag (0 = unspecified)">;
+} BONE_DEFINITION <read=ReadBoneDefinition>;
+
+string ReadBoneDefinition(BONE_DEFINITION &b) {
+    string s;
+    SPrintf(s, "'%s' | parent: %d | bodyPart: %d", b.boneName, b.parentBoneIndex, b.bodyPart);
+    return s;
+}
+
+// Scale-Vector-Quaternion bind pose entry, 32 bytes.
+typedef struct {
+    VEC4F Quaternion;
+    VEC4F Position <comment="W is Always 1.0 as Padding">;
+} BIND_POSE_SVQ <read=Str("Rotation: (%.3f, %.3f, %.3f, %.3f) | Position: (%.3f, %.3f, %.3f)",
+                          this.Quaternion.X, this.Quaternion.Y, this.Quaternion.Z, this.Quaternion.W,
+                          this.Position.X, this.Position.Y, this.Position.Z)>;
+
+// The bind-pose-inverse global transform. Row 0,1, 2 is the rotation/scale matrix, Row 3 is the translation.
+typedef struct {
+    VEC3F Row0;
+    VEC3F Row1;
+    VEC3F Row2;
+    VEC3F Translation;
+} INV_GLOBAL_MATRIX_4X3 <read=Str("Translation: (%.3f, %.3f, %.3f)", this.Translation.X, this.Translation.Y, this.Translation.Z)>;
+
+// PoseBone: 48 bytes. The w-component of pos and scale is typically padding.
+typedef struct {
+    VEC4F Quaternion;
+    VEC4F Position <comment="W is Always 1.0 as Padding">;
+    VEC4F Scale    <comment="W is Always 1.0 as Padding">;
+} POSE_BONE <read=Str("Rotation: (%.3f, %.3f, %.3f, %.3f)", this.Quaternion.X, this.Quaternion.Y, this.Quaternion.Z, this.Quaternion.W)>;
+
+//-------------------------------------------------------------------------------------------
+// Pose Bones Header: Sub-header for the optional pose / face-bone system.
+// 40 bytes / 10 uints. If poses aren't used in this rig then all fields will be stored as 0
+//-------------------------------------------------------------------------------------------
+typedef struct {
+    uint poseBoneArrayOffset        <name="Pose Bone Array Offset">;
+    uint poseBoneIndexArrayOffset   <name="Pose Bone Index Array Offset">;
+    uint poseBoneCountTotal         <name="Pose Bone Total Count", comment="Total number of POSE_BONE entries">;
+    uint poseEntryIndexArrayOffset  <name="Pose Bone Entry Index Array Offset">;
+    uint poseBoneCountArrayOffset   <name="Pose Bone Count Array Offset">;
+    uint poseCount                  <name="Pose Count", comment="Number of named poses">;
+    uint namesListOffset            <name="Pose Names List Offset">;
+    uint namesEntryIndexArrayOffset <name="Pose Names Entry Index Array Offset">;
+    uint faceBoneIndexArrayOffset   <name="Face Bone Index Array Offset">;
+    uint faceBoneCount              <name="Face Bone Count", comment="Number of face bone indices in the array">;
+} POSE_BONE_HEADER <read=Str("%u Pose Bones | %u Poses | %u Face Bones", this.poseBoneCountTotal, this.poseCount, this.faceBoneCount)>;
+
+//---------------------------------------------------------------------------------------
+// Bone Constraints: The only place where Hitman and 007FL diverge in per-record layout.
+// Index fields are ubyte in Hitman, ushort in 007FL.
+//
+// Two known sub-types share the leading discriminator field:
+//   Type: 1 (LOOKAT) - Aim-at-target constraint with up-axis control
+//   Type: 2 (ROTATE) - Twist constraint driven by a reference bone
+//---------------------------------------------------------------------------------------
+
+// Hitman Variants
+typedef struct { // 56 bytes total
+    BONE_CONSTRAINT_TYPE_UBYTE Type <comment="Always 1 for Lookat">;
+    ubyte boneIndex                 <name="Bone Index">;
+    ubyte targetCount               <name="Target Count", comment="Number of valid targets (1 or 2). Stored arrays are always 2-wide.">;
+    ubyte lookAtAxis                <name="LookAt Axis">;
+    ubyte upBoneAlignmentAxis       <name="Up Bone Alignment Axis">;
+    ubyte lookAtFlip                <name="LookAt Flip">;
+    ubyte upFlip                    <name="Up Flip">;
+    ubyte upNodeControl             <name="Up Node Control">;
+    ubyte upNodeParentIndex         <name="Up Node Parent Index">;
+    ubyte targetParentIndex[2]      <name="Target Parent Index">;
+    FSkip(1); // Reserved
+    VEC2F boneTargetsWeights        <name="Bone Targets Weights">;
+    VEC3F targetPosition0           <name="Bone Target Position #1">;
+    VEC3F targetPosition1           <name="Bone Target Position #2">;
+    VEC3F upPosition                <name="Bone Up Position">;
+} BONE_CONSTRAINT_LOOKAT_HITMAN <read=Str("LookAt Bone: %u (%u Targets)", this.boneIndex, this.targetCount)>;
+
+typedef struct { // 8 bytes total. Drives boneIndex by referenceBoneIndex * twistWeight.
+    BONE_CONSTRAINT_TYPE_UBYTE Type <comment="Always 2 for Rotate">;
+    ubyte boneIndex                 <name="Bone Index",           comment="The twist bone being driven">;
+    ubyte referenceBoneIndex        <name="Reference Bone Index", comment="The bone whose rotation drives this twist">;
+    FSkip(1); // Reserved
+    float twistWeight               <name="Twist Weight",         comment="Fraction of referenceBone rotation applied (Range [-1, 1])">;
+} BONE_CONSTRAINT_ROTATE_HITMAN <read=Str("Rotate Bone: %u <- Bone: %u * %.3f", this.boneIndex, this.referenceBoneIndex, this.twistWeight)>;
+
+// Dispatch on the type byte (Peeked without advancing). Picks the correct variant struct for each constraint record.
+typedef struct {
+    local uchar typePeek <hidden=true> = ReadUByte(FTell());
+    if      (typePeek == 1) BONE_CONSTRAINT_LOOKAT_HITMAN Lookat;
+    else if (typePeek == 2) BONE_CONSTRAINT_ROTATE_HITMAN Rotate;
+    else                    ubyte UnknownConstraintData <comment="Unrecognised Type">;
+} BONE_CONSTRAINT_HITMAN;
+
+// 007 FIRST LIGHT Variants. All ubyte index fields widened to ushort to support skeletons with > 255 bones.
+typedef struct { // 68 bytes total.
+    BONE_CONSTRAINT_TYPE_USHORT Type <comment="Always 1 for Lookat">;
+    ushort boneIndex                 <name="Bone Index">;
+    ushort targetCount               <name="Target Count", comment="Number of valid targets (1 or 2).">;
+    ushort lookAtAxis                <name="LookAt Axis">;
+    ushort upBoneAlignmentAxis       <name="Up Bone Alignment Axis">;
+    ushort lookAtFlip                <name="LookAt Flip">;
+    ushort upFlip                    <name="Up Flip">;
+    ushort upNodeControl             <name="Up Node Control">;
+    ushort upNodeParentIndex         <name="Up Node Parent Index">;
+    ushort targetParentIndex[2]      <name="Target Parent Index">;
+    FSkip(2); // Reserved
+    VEC2F  boneTargetsWeights        <name="Bone Targets Weights">;
+    VEC3F  targetPosition0           <name="Bone Target Position #1">;
+    VEC3F  targetPosition1           <name="Bone Target Position #2">;
+    VEC3F  upPosition                <name="Bone Up Position">;
+} BONE_CONSTRAINT_LOOKAT_007FL <read=Str("LookAt Bone: %u (%u Targets)", this.boneIndex, this.targetCount)>;
+
+typedef struct { // 12 bytes total.
+    BONE_CONSTRAINT_TYPE_USHORT Type <comment="Always 2 for Rotate">;
+    ushort boneIndex                 <name="Bone Index",           comment="The twist bone being driven">;
+    ushort referenceBoneIndex        <name="Reference Bone Index", comment="The bone whose rotation drives this twist">;
+    FSkip(2); // Reserved
+    float  twistWeight               <name="Twist Weight",         comment="Fraction of referenceBone rotation applied (Range [-1, 1])">;
+} BONE_CONSTRAINT_ROTATE_007FL <read=Str("Rotate Bone: %u <- Bone: %u * %.3f", this.boneIndex, this.referenceBoneIndex, this.twistWeight)>;
+
+// Dispatch on the type field (Now ushort so peek 2 bytes). Picks variant.
+typedef struct {
+    local ushort typePeek <hidden=true> = ReadUShort(FTell());
+    if      (typePeek == 1) BONE_CONSTRAINT_LOOKAT_007FL Lookat;
+    else if (typePeek == 2) BONE_CONSTRAINT_ROTATE_007FL Rotate;
+    else                    ubyte unknownConstraintData <comment="Unrecognised Type">;
+} BONE_CONSTRAINT_007FL;
+
+// Wrapper: Read the count then count the BONE_CONSTRAINT_GAME records.
+// Note that records are variable sized (LookAt is bigger than Rotate) so this must be parsed one record at a time and not via a fixed stride array.
+typedef struct (uint isFL) {
+    uint constraintCount <name="Bone Contraint Count">;
+    if (constraintCount > 0) {
+        local uint c <hidden=true>;
+        for (c = 0; c < constraintCount; c++) {
+            if (isFL) BONE_CONSTRAINT_007FL  Constraint;
+            else      BONE_CONSTRAINT_HITMAN Constraint;
+        }
+    }
+} BONE_CONSTRAINTS <read=Str("%u Constraints", this.constraintCount)>;
+
+//--------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------------------------------------------
+// Main Header (The data block sitting at the end of the file pointed to by the integer at the start of the file).
+//-----------------------------------------------------------------------------------------------------------------
+// HITMAN         : 40 bytes total - 8 uints and a uint64 (boneMapOffset)
+// 007 FIRST LIGHT: 32 bytes total - Dropped the boneMapOffset 8 uints flat.
+//-----------------------------------------------------------------------------------------------------------------
+
+typedef struct {
+    uint   boneCount                       <name="Bone Count">;
+    uint   animatedBoneCount               <name="Animated Bone Count", comment="boneCount - constraintCount; Non-constrained bones that participate in animation">;
+    uint   boneDefinitionsOffset           <name="Bone Definitions Offset">;
+    uint   bindPoseOffset                  <name="Bind Pose Offset">;
+    uint   bindPoseInvGlobalMatricesOffset <name="Bind Pose Inverse Global Matrices Offset">;
+    uint   boneConstraintsHeaderOffset     <name="Bone Constraints Header Offset">;
+    uint   poseBoneHeaderOffset            <name="Pose Bone Header Offset">;
+    uint   invertGlobalBonesOffset         <name="Invert Global Bones Offset", comment="Always 0">;
+    uint64 boneMapOffset                   <name="Bone Map Offset", comment="Always 0, Removed in 007FL">;
+} BONE_RIG_HEADER_HITMAN <read=Str("%u Bones | %u Animated Bones", this.boneCount, this.animatedBoneCount)>;
+
+typedef struct {
+    uint boneCount                         <name="Bone Count">;
+    uint animatedBoneCount                 <name="Animated Bone Count", comment="boneCount - constraintCount; Non-constrained bones that participate in animation">;
+    uint boneDefinitionsOffset             <name="Bone Definitions Offset">;
+    uint bindPoseOffset                    <name="Bind Pose Offset">;
+    uint bindPoseInvGlobalMatricesOffset   <name="Bind Pose Inverse Global Matrices Offset">;
+    uint boneConstraintsHeaderOffset       <name="Bone Constraints Header Offset">;
+    uint poseBoneHeaderOffset              <name="Pose Bone Header Offset">;
+    uint invertGlobalBonesOffset           <name="Invert Global Bones Offset", comment="Always 0">;
+} BONE_RIG_HEADER_007FL <read=Str("%u Bones | %u Animated Bones", this.boneCount, this.animatedBoneCount)>;
+
+//---------------------------------------------------------------------------------------------
+// PoseBone Data Block: Parsed only when the rig actually uses poses (poseBoneCountTotal > 0).
+//---------------------------------------------------------------------------------------------
+// Layout:
+//   PoseBone[poseBoneCountTotal]                 48 bytes each
+//   poseBoneIndices:    uint[poseBoneCountTotal] 4  bytes each
+//   poseEntryIndices:   uint[poseCount]          4  bytes each
+//   poseBoneCountArray: uint[poseCount]          4  bytes each
+//   namesList:          cstring[poseCount]       (Variable lengths, Null-terminated)
+//   namesEntryIndices:  uint[poseCount]          (Relative offsets into namesList)
+//   faceBoneIndices:    uint[faceBoneCount]
+//----------------------------------------------------------------------------------------------
+
+typedef struct (uint count) { if (count > 0) POSE_BONE Bones[count] <optimize=false>; } POSE_BONE_ARRAY <read=Str("%u pose bones", sizeof(this) / 48)>;
+
+typedef struct (uint count) { if (count > 0) uint Indices[count]; } U32_ARRAY <read=Str("%u uint Entries", sizeof(this) / 4)>;
+
+typedef struct (uint count) {
+    if (count > 0) {
+        local uint c <hidden=true>;
+        for (c = 0; c < count; c++) string Name;
+    }
+} CSTRING_LIST <read=Str("%u Names", sizeof(this))>;
+
+//--------------------------------------------------------------------------
+
+struct {
+    // File Start: Pointer/Offset to BONE_RIG_OBJECT_HEADER then 8 bytes of padding
+    // This is obviously a uint32 instead of a uint64 on Absolution but it happens to work so whatever lol #lazy
+    uint64 headerOffset <name="Header Offset">;
+
+    // Jump to and parse the main header (Hitman: 40 bytes | 007FL: 32 bytes)
+    FSeek(headerOffset);
+    if (Game == "007FL") BONE_RIG_HEADER_007FL  Header;
+    else                 BONE_RIG_HEADER_HITMAN Header;
+
+    //----- Bone definitions -----
+    if (Header.boneDefinitionsOffset != 0 && Header.boneCount > 0) {
+        FSeek(Header.boneDefinitionsOffset);
+        BONE_DEFINITION BoneDefinitions[Header.boneCount] <name="Bone Defintions", optimize=false>;
+    }
+
+    //----- Bind poses (SVQ) -----
+    if (Header.bindPoseOffset != 0 && Header.boneCount > 0) {
+        FSeek(Header.bindPoseOffset);
+        BIND_POSE_SVQ BindPoses[Header.boneCount] <name="Bind Poses", optimize=false>;
+    }
+
+    //----- Inverse global matrices (one 4x3 matrix per bone) -----
+    if (Header.bindPoseInvGlobalMatricesOffset != 0 && Header.boneCount > 0) {
+        FSeek(Header.bindPoseInvGlobalMatricesOffset);
+        INV_GLOBAL_MATRIX_4X3 InvGlobalMatrices[Header.boneCount] <name="Inverse Global Matrices", optimize=false>;
+    }
+
+    //----- Bone constraints (variable-sized records) -----
+    if (Header.boneConstraintsHeaderOffset != 0) {
+        FSeek(Header.boneConstraintsHeaderOffset);
+        BONE_CONSTRAINTS BoneConstraintsBlock(Game == "007FL") <name="Bone Constraints">;
+    }
+
+    //----- Pose-bone system (optional) -----
+    if (Header.poseBoneHeaderOffset != 0) {
+        FSeek(Header.poseBoneHeaderOffset);
+        POSE_BONE_HEADER PoseHeader <name="Pose Header">;
+
+        // Pose bones (48 bytes each)
+        if (PoseHeader.poseBoneCountTotal > 0 && PoseHeader.poseBoneArrayOffset != 0) {
+            FSeek(PoseHeader.poseBoneArrayOffset);
+            POSE_BONE_ARRAY PoseBones(PoseHeader.poseBoneCountTotal) <name="Pose Bones">;
+        }
+
+        // Pose-bone indices: which bones each pose drives
+        if (PoseHeader.poseBoneCountTotal > 0 && PoseHeader.poseBoneIndexArrayOffset != 0) {
+            FSeek(PoseHeader.poseBoneIndexArrayOffset);
+            U32_ARRAY PoseBoneIndices(PoseHeader.poseBoneCountTotal) <name="Pose Bone Indices">;
+        }
+
+        // Per-pose entry start indices into PoseBoneIndices
+        if (PoseHeader.poseCount > 0 && PoseHeader.poseEntryIndexArrayOffset != 0) {
+            FSeek(PoseHeader.poseEntryIndexArrayOffset);
+            U32_ARRAY PoseEntryIndices(PoseHeader.poseCount) <name="Pose Entry Indices">;
+        }
+
+        // Per-pose bone counts
+        if (PoseHeader.poseCount > 0 && PoseHeader.poseBoneCountArrayOffset != 0) {
+            FSeek(PoseHeader.poseBoneCountArrayOffset);
+            U32_ARRAY PoseBoneCounts(PoseHeader.poseCount) <name="Pose Bone Counts">;
+        }
+
+        // Names list (variable-length cstrings packed back-to-back)
+        if (PoseHeader.poseCount > 0 && PoseHeader.namesListOffset != 0) {
+            FSeek(PoseHeader.namesListOffset);
+            CSTRING_LIST PoseNames(PoseHeader.poseCount) <name="Pose Names">;
+        }
+
+        // Per-pose name offsets into PoseNames (relative to namesListOffset)
+        if (PoseHeader.poseCount > 0 && PoseHeader.namesEntryIndexArrayOffset != 0) {
+            FSeek(PoseHeader.namesEntryIndexArrayOffset);
+            U32_ARRAY NamesEntryIndices(PoseHeader.poseCount) <name="Pose Name Indices">;
+        }
+
+        // Face bone indices (subset of all bones that drive facial poses)
+        if (PoseHeader.faceBoneCount > 0 && PoseHeader.faceBoneIndexArrayOffset != 0) {
+            FSeek(PoseHeader.faceBoneIndexArrayOffset);
+            U32_ARRAY FaceBoneIndices(PoseHeader.faceBoneCount) <name="Pose Face Bone Indices">;
+        }
+    }
+} BORG <name="IO Interactive Glacier 2 .BORG BoneRig">;
+
+//--------------------------------------------------------------------------

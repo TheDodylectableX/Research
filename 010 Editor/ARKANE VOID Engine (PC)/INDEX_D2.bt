@@ -1,51 +1,57 @@
-//----------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------------
 //--- 010 Editor Binary Template
 //
 //      File: INDEX_D2.bt
 //   Authors: Dodylectable
 //   Version: 1.0
-//   Purpose: Reverse engineering Dishonored 2's index file list format of all game files
+//   Purpose: Reverse engineering Dishonored 2 & Death of The Outsider's index file list format
 //  Category: Archives
 // File Mask: *.index
 //  ID Bytes: 05 53 45 52
 //   History: 
-//----------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------------
+
+// If a file entry's primary and secondary flags were both 32 and 32768 then this file is stored in a shared archive (.sharedrsc)
 
 #include "../Common.bt"
 
+typedef enum <ubyte> {
+    INDEX     = 4,
+    RESOURCES = 5
+} INDEX_TYPE;
+
 typedef struct {
     BigEndian();
-    ubyte INDEXType <name="INDEX Type", comment="4 = Index / 5 = Resources">;
-    char Magic[3]   <name="Magic",      comment="Always SER">;
-    uint INDEXSize  <name="INDEX Size", comment="Size of this file minus 32 bytes">;
+    INDEX_TYPE INDEXType <name="INDEX Type", comment="4: Index | 5: Resources">;
+    char       Magic[3]  <name="Magic",      comment="Always SER">;
+    uint       INDEXSize <name="INDEX Size", comment="Size of this file minus 32 bytes">;
     FSkip(24); // Reserved
-    uint FileCount  <name="File Count">;
-} Header <name="Header", read=Str("INDEX Type: %u | INDEX Magic: %s | INDEX Size: %u | File Count: %u Files",
-                                  this.INDEXType, this.Magic, this.INDEXSize, this.FileCount)>;
+    uint       fileCount <name="File Count">;
+} INDEX_HEADER <read=Str("INDEX Type: %u | INDEX Magic: %s | INDEX Size: %u bytes | File Count: %u Files", this.INDEXType, this.Magic, this.INDEXSize + 32, this.fileCount)>;
 
 typedef struct {
     BigEndian();
-    uint ResourceIndex             <name="Resource Index">;
+    uint   resourceIndex            <name="Resource Index">;
     LittleEndian();
-    String ResourceType            <name="Resource Type">;
-    String ResourceListingUncooked <name="Resource Listing (Uncooked)", comment="Uncooked file listing, Referenced in DECLs and the files themselves">;
-    String ResourceListingCooked   <name="Resource Listing (Cooked)",   comment="Cooked file listing, the file's actual path">;
+    String resourceType             <name="Resource Type">;
+    String resourceListingUncooked  <name="Resource Listing (Uncooked)", comment="Uncooked file listing, Referenced in DECLs and the files themselves">;
+    String resourceListingCooked    <name="Resource Listing (Cooked)",   comment="Cooked file listing, the file's actual path">;
     BigEndian();
-    uint64 ResourceOffset          <name="Resource Offset", comment="Absolute">;
-    uint ResourceSizeUncompressed  <name="Resource Size (Uncompressed)">;
-    uint ResourceSizeCompressed    <name="Resource Size (Compressed)", comment="ZLib">;
+    uint64 resourceOffset           <name="Resource Offset",             comment="Absolute">;
+    uint   resourceSizeUncompressed <name="Resource Size (Uncompressed)">;
+    uint   resourceSizeCompressed   <name="Resource Size (Compressed)",  comment="ZLib">;
     FSkip(4); // Reserved
-    uint   FileFlagsPrimary        <name="Resource Flags (Primary)">;
-    ushort FileFlagsSecondary      <name="Resource Flags (Secondary)">;
+    uint   resourceFlagsPrimary     <name="Resource Flags (Primary)",    comment="32: Shared Resource", format=hex>;
+    ushort resourceFlagsSecondary   <name="Resource Flags (Secondary)",  comment="32768: Shared Resource", format=hex>;
     LittleEndian();
-} Files <name="File Entry", read=Str("%s | %s | File Offset: %u | File Size (Uncompressed): %u bytes",
-                                     this.ResourceType.ActualString, this.ResourceListingCooked.ActualString, this.ResourceOffset, this.ResourceSizeUncompressed)>;
+} INDEX_ENTRY <name="File Entry", read=Str("ID: %u | %s | %s | File Offset: %u | File Size (Uncompressed): %u bytes",
+                                     this.resourceIndex, this.resourceType.ActualString, this.resourceListingCooked.ActualString, this.resourceOffset, this.resourceSizeUncompressed)>;
 
-//----------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------------------------------
 
 struct {
-    Header header;
-    if (header.FileCount > 0) Files files[header.FileCount] <comment="INDEX File Listing", optimize=false>;
+    INDEX_HEADER Header;
+    if (Header.fileCount > 0) INDEX_ENTRY Entry[Header.fileCount] <comment="INDEX File Listing", optimize=false>;
 } INDEX_VOID <name="Arkane Studios VOID Engine .INDEX File">;
 
-//----------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------------------------------

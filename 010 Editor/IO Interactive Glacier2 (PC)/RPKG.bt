@@ -15,10 +15,12 @@
 // There are two versions of the format, RPKG and RPK2.
 // Both use LZ4 compression and XOR encryption with a rotating key.
 
-//-----------------------------------------------------------------------
-// Switch game types to parse the archives properly!
-// "Hitman" - HITMAN: World of Assassination | "007FL" - 007 First Light
-//-----------------------------------------------------------------------
+// --------------------------------------------------
+// GAME DETECTION: Set this manually before parsing!
+// --------------------------------------------------
+//   "Hitman"    : Hitman World of Assassination
+//   "007FL"     : 007 First Light
+// --------------------------------------------------
 const string Game <hidden=true> = "007FL";
 
 LittleEndian();

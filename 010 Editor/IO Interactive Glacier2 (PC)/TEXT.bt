@@ -1,0 +1,349 @@
+//-------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: TEXT.bt
+//   Authors: Dodylectable, Glacier 2 Modding Community
+//   Version: 1.0
+//   Purpose: Reverse engineering IO Interactive's Glacier2 textures
+//  Category: Textures
+// File Mask: *.TEXT
+//  ID Bytes: 01 00 00 00
+//   History:
+//-------------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+
+//--------------------------------------------------
+// GAME DETECTION: Set this manually before parsing!
+//--------------------------------------------------
+//   "ABSOLUTION": Hitman Absolution
+//   "TRILOGY"   : Hitman World of Assassination
+//   "007FL"     : 007 First Light
+//--------------------------------------------------
+const string Game <hidden=true> = "007FL";
+
+//--------------
+// Enumerations
+//--------------
+
+// IOI's ERenderTextureType. A BC1 diffuse reads TT_COLOR, A BC5 normal map reads TT_NORMAL. etc.
+// (Absolution has no textureType field; It encodes this via textureInterpretAs instead.)
+typedef enum <ushort> {
+    TT_COLOR           = 0,
+    TT_NORMAL          = 1,
+    TT_HEIGHT          = 2,
+    TT_COMPOUND_NORMAL = 3,
+    TT_BILLBOARD       = 4
+} TEXTURE_TYPE;
+
+// Render Format: Shared by HITMAN Absolution and World of Assassination.
+typedef enum <ushort> {
+    FMT_R16G16B16A16 = 0x0A,
+    FMT_R8G8B8A8     = 0x1C,
+    FMT_R8G8         = 0x34,
+    FMT_A8           = 0x42,
+    FMT_BC1          = 0x49,
+    FMT_BC2          = 0x4C,
+    FMT_BC3          = 0x4F,
+    FMT_BC4          = 0x52,
+    FMT_BC5          = 0x55,
+    FMT_BC7          = 0x5A  // Not implemented in Absolution
+} RENDER_FORMAT;
+
+// Render Format: 007 First Light renumbered them.
+typedef enum <ushort> {
+    FMT_FL_BC1 = 0x4C,
+    FMT_FL_BC2 = 0x4F,
+    FMT_FL_BC3 = 0x42,
+    FMT_FL_BC4 = 0x55,
+    FMT_FL_BC5 = 0x58,
+    FMT_FL_BC7 = 0x5E
+} RENDER_FORMAT_007FL;
+
+// Texture Flags
+typedef enum <uint> {
+    TEXF_SWIZZLED             = 0x01,
+    TEXF_DEFERRED             = 0x02,
+    TEXF_MEMORY_READY_XBOX360 = 0x04,
+    TEXF_GAMMA                = 0x08,
+    TEXF_EMISSIVE             = 0x10,
+    TEXF_DDSC_ENCODED         = 0x20
+} TEXTURE_FLAGS;
+
+// Absolution EInterpretAs
+typedef enum <ubyte> {
+    IA_COLOR  = 0,
+    IA_NORMAL = 1,
+    IA_HEIGHT = 2
+} INTERPRET_AS;
+
+// Absolution EDimensions.
+typedef enum <ubyte> {
+    DIM_2D     = 0,
+    DIM_CUBE   = 1,
+    DIM_VOLUME = 2
+} DIMENSIONS;
+
+// Absolution ERenderResourceMipInterpolation.
+typedef enum <ubyte> {
+    MIP_NONE   = 0,
+    MIP_POINT  = 1,
+    MIP_LINEAR = 2
+} MIP_INTERPOLATION;
+
+//----------------------------------------------------------------------------------------------------------------------
+// Render Format Helpers
+//----------------------------------------------------------------------------------------------------------------------
+// The raw byte at +0x10 is a game-specific enum. RenderFormatBase() maps it to a canonical family name, block size
+// byte count key off that name so the game-branch lives in exactly one place. This mirrors the two typedef enums above
+// but kept as a function because block math needs a game-agnostic family.)
+//----------------------------------------------------------------------------------------------------------------------
+
+string RenderFormatBase(ushort code) {
+    if (Game == "007FL") {
+        switch (code) {
+            case 0x4C: return "BC1";
+            case 0x4F: return "BC2";
+            case 0x42: return "BC3";
+            case 0x55: return "BC4";
+            case 0x58: return "BC5";
+            case 0x5E: return "BC7";
+            default:   return "Unknown";
+        }
+    } else {
+        switch (code) {
+            case 0x0A: return "R16G16B16A16";
+            case 0x1C: return "R8G8B8A8";
+            case 0x34: return "R8G8";
+            case 0x42: return "A8";
+            case 0x49: return "BC1";
+            case 0x4C: return "BC2";
+            case 0x4F: return "BC3";
+            case 0x52: return "BC4";
+            case 0x55: return "BC5";
+            case 0x5A: return "BC7";
+            default:   return "Unknown";
+        }
+    }
+}
+
+// Bytes per block / pixel for a format code.
+int FormatBytesPerUnit(ushort code) {
+    local string f = RenderFormatBase(code);
+    if (f == "BC1" || f == "BC4")                             return 8;
+    if (f == "BC2" || f == "BC3" || f == "BC5" || f == "BC7") return 16;
+    if (f == "R32G32B32A32")                                  return 16;
+    if (f == "R16G16B16A16")                                  return 8;
+    if (f == "R8G8B8A8")                                      return 4;
+    if (f == "R8G8")                                          return 2;
+    if (f == "A8")                                            return 1;
+    return 0; // Unknown -> Caller should treat mip sizing as unavailable
+}
+
+// Block edge in texels: 4 for the BCn family and 1 for uncompressed formats.
+int FormatBlockDim(ushort code) {
+    local string f = RenderFormatBase(code);
+    if (f[0] == 'B' && f[1] == 'C') return 4;
+    return 1;
+}
+
+// Decoded byte size of one mip level (WxH).
+// Uses ceil-to-block so this is correct for NPOT textures as well as POT of course.
+int MipDataSize(ushort code, int w, int h) {
+    local int bpu = FormatBytesPerUnit(code);
+    local int bd  = FormatBlockDim(code);
+    local int bw  = (w + bd - 1) / bd; if (bw < 1) bw = 1;
+    local int bh  = (h + bd - 1) / bd; if (bh < 1) bh = 1;
+    return bw * bh * bpu;
+}
+
+// Decode the flags bitfield into a readable string.
+string ReadTextureFlags(TEXTURE_FLAGS &f) {
+    local uint v = f;
+    local string s = "";
+    if (v & TEXF_SWIZZLED)             s = s + "SWIZZLED | ";
+    if (v & TEXF_DEFERRED)             s = s + "DEFERRED | ";
+    if (v & TEXF_MEMORY_READY_XBOX360) s = s + "XBOX360_MEM | ";
+    if (v & TEXF_GAMMA)                s = s + "GAMMA | ";
+    if (v & TEXF_EMISSIVE)             s = s + "EMISSIVE | ";
+    if (v & TEXF_DDSC_ENCODED)         s = s + "DDSC | ";
+    local uint known = TEXF_SWIZZLED | TEXF_DEFERRED | TEXF_MEMORY_READY_XBOX360 | TEXF_GAMMA | TEXF_EMISSIVE | TEXF_DDSC_ENCODED;
+    local uint unk = v & ~known;
+    if (unk != 0) { local string h; SPrintf(h, "0x%X | ", unk); s = s + h; }
+    if (Strlen(s) == 0) return "(none)";
+    return SubStr(s, 0, Strlen(s) - 3); // trim trailing " | "
+}
+
+//-------------------------------------------------------------------
+
+//---------------------------------------------------------------------
+// Hitman World of Assassination and 007 First Light Header
+//---------------------------------------------------------------------
+typedef struct {
+    ushort        Magic        <comment="Always 0x0001", format=hex>;
+    TEXTURE_TYPE  textureType  <name="Texture Type",     comment="Color, Normal, etc.">;
+    uint          fileSize     <name="File Size",        comment="Approximates the companion TEXD on-disk size minus 152 bytes of this TEXT's header">;
+    TEXTURE_FLAGS textureFlags <name="Texture Flags",    read=ReadTextureFlags>;
+    ushort        imageWidth   <name="Image Width",      comment="Full Resolution (TEXD) Width">;
+    ushort        imageHeight  <name="Image Height",     comment="Full Resolution (TEXD) Height">;
+
+    // Render Format: The one field that differs between WoA and 007FL.
+    if (Game == "007FL") RENDER_FORMAT_007FL textureRenderFormat <name="Render Format">;
+    else                 RENDER_FORMAT       textureRenderFormat <name="Render Format">;
+
+    ubyte mipLevels  <name="Mip Levels">;
+    ubyte defaultMip <name="Default Mip">;
+
+    // The following three are NOT the same as Absolution's identically-named fields.
+    // Across every WoA/007FL file (Both color and normal) they read a constant 0x01 / 0x00 / 0x0000 so their semantics here are unconfirmed
+    // WoA/007FL carry the color/normal distinction in textureType (+0x02) instead. Left as raw values (not enum-typed) to avoid misleading labels.
+    ubyte  textureInterpretAs      <name="Interpret As?",      comment="Observed constant 0x01 (Color and normal) - Semantics Unconfirmed">;
+    ubyte  textureDimensions       <name="Dimensions?",        comment="RPKG Reference: mipsUnknown2">;
+    ushort textureMipInterpolation <name="Mip Interpolation?", comment="RPKG Reference: mipsMode">;
+
+    // Two 14-slot cumulative tables. Entry k = the END offset of mip k.
+    //   mipSizes[k]           - Decoded (Uncompressed) Cumulative size
+    //   mipSizesCompressed[k] - On-Disk (Compressed)   Cumulative size
+    // Per-mip size = entry[k] - entry[k-1]. Equal tables => Stored raw (No LZ4). Slots beyond mipLevels are 0.
+    uint mipSizes[14]           <name="Mip Sizes (Decoded)">;
+    uint mipSizesCompressed[14] <name="Mip Sizes (On Disk)">;
+
+    uint  textureAtlasSize      <name="Texture Atlas Size">;
+    uint  textureAtlasOffset    <name="Texture Atlas Offset", comment="Header Size: Texture body begins at textureAtlasOffset + textureAtlasSize">;
+
+    // Texture scaling block. Proxy start mip = textureScalingWidth (an exponent):
+    // Proxy dims = full dims >> textureScalingWidth. 0/0 => The TEXT is self-contained.
+    // For a true mip-level proxy textureScalingWidth == textureScalingHeight even when the texture is non-square, since a mip halves both axes by the same power.
+    ubyte textureScalingData1  <name="Scaling Data 1", format=hex>;
+    ubyte textureScalingWidth  <name="Scaling Width (2^)", comment="Proxy start mip index">;
+    ubyte textureScalingHeight <name="Scaling Height (2^)">;
+    ubyte textureScalingData2  <name="Scaling Data 2", format=hex>;
+    FSkip(4); // Reserved
+} TEXT_HEADER <read=ReadTextHeader>;
+
+string ReadTextHeader(TEXT_HEADER &h) {
+    string s;
+    SPrintf(s, "%ux%u | %s | %u Mips | %s",
+            h.imageWidth, h.imageHeight, RenderFormatBase(h.textureRenderFormat), h.mipLevels,
+           (h.mipSizesCompressed[h.mipLevels-1] != h.mipSizes[h.mipLevels-1]) ? "LZ4" : "Uncompressed");
+    return s;
+}
+
+//-------------------------------------------------------------------------------------------------------------------------------
+// One mip of a WoA/007FL body (proxy or self-contained TEXT). Carries its geometry as locals so the tree label can describe it.
+//-------------------------------------------------------------------------------------------------------------------------------
+typedef struct (int mipIndex, int w, int h, int compSize, int decSize, int isLZ4) {
+    local int mIdx <hidden=true> = mipIndex;
+    local int mW   <hidden=true> = w;
+    local int mH   <hidden=true> = h;
+    local int mC   <hidden=true> = compSize;
+    local int mD   <hidden=true> = decSize;
+    local int mLZ  <hidden=true> = isLZ4;
+
+    if (compSize > 0) {
+        if (isLZ4) ubyte LZ4Block[compSize]  <comment="Raw-block LZ4 for this mip (No frame header)">;
+        else       ubyte rawPixels[compSize] <comment="Uncompressed pixel data for this mip">;
+    }
+} GLACIER2_MIP <read=ReadGlacier2Mip>;
+
+string ReadGlacier2Mip(GLACIER2_MIP &m) {
+    string s;
+    if (m.mLZ) SPrintf(s, "Mip %u | %ux%u | LZ4 %u -> %u bytes",    m.mIdx, m.mW, m.mH, m.mC, m.mD);
+    else       SPrintf(s, "Mip %u | %ux%u | Uncompressed %u bytes", m.mIdx, m.mW, m.mH, m.mC);
+    return s;
+}
+
+//----------------------------------------------------------------------------------------------------------
+// Absolution Header: 32 bytes then a raw mip pyramid. Field names/types are the exact authoritative struct
+//----------------------------------------------------------------------------------------------------------
+typedef struct {
+    uint              textureSliceCount       <name="Num Slices", comment="Array/Cube Slices; 1 for a plain 2D texture">;
+    uint              textureTotalSize        <name="Total Size", comment="Bytes after textureSliceCount (= fileSize - 4)">;
+    TEXTURE_FLAGS     textureFlags            <name="Flags",      read=ReadTextureFlags>;
+    ushort            imageWidth              <name="Image Width">;
+    ushort            imageHeight             <name="Image Height">;
+    RENDER_FORMAT     textureRenderFormat     <name="Render Format">;
+    ubyte             mipLevels               <name="Mip Levels">;
+    ubyte             defaultMipLevel         <name="Default Mip Level">;
+    INTERPRET_AS      textureInterpretAs      <name="Interpret As">;
+    DIMENSIONS        textureDimensions       <name="Dimensions">;
+    MIP_INTERPOLATION textureMipInterpolation <name="Mip Interpolation">;
+    FSkip(1); // Reserved
+    uint              nInterpretAsDataSize    <name="IA Data Size",   comment="Interpret-As/atlas payload size; 0 = none">;
+    uint              nInterpretAsDataOffset  <name="IA Data Offset", comment="Offset from +0x04 to that payload; == textureTotalSize (EOF) when none">;
+} ABSOLUTION_HEADER <read=ReadAbsolutionHeader>;
+
+string ReadAbsolutionHeader(ABSOLUTION_HEADER &h) {
+    string s;
+    SPrintf(s, "%ux%u | %s | %u Mips | Uncompressed",
+            h.imageWidth, h.imageHeight, RenderFormatBase(h.textureRenderFormat), h.mipLevels);
+    return s;
+}
+
+//---------------------------------------
+// One raw mip of an Absolution pyramid.
+//---------------------------------------
+typedef struct (int mipIndex, int w, int h, int sz) {
+    local int mIdx <hidden=true> = mipIndex;
+    local int mW   <hidden=true> = w;
+    local int mH   <hidden=true> = h;
+    local int mS   <hidden=true> = sz;
+    if (sz > 0) ubyte rawPixels[sz];
+} ABSOLUTION_MIP <read=ReadAbsolutionMip>;
+
+string ReadAbsolutionMip(ABSOLUTION_MIP &m) {
+    string s;
+    SPrintf(s, "Mip %u | %ux%u | %u bytes Uncompressed", m.mIdx, m.mW, m.mH, m.mS);
+    return s;
+}
+
+//-------------------------------------------------------------------
+
+struct {
+    if (Game == "Absolution") {
+        ABSOLUTION_HEADER Header <name="Header">;
+
+        local int k  <hidden=true>; local int mw <hidden=true>;
+        local int mh <hidden=true>; local int sz <hidden=true>;
+        for (k = 0; k < Header.mipLevels; k++) {
+            mw = Header.imageWidth  >> k; if (mw < 1) mw = 1;
+            mh = Header.imageHeight >> k; if (mh < 1) mh = 1;
+            sz = MipDataSize(Header.textureRenderFormat, mw, mh);
+            if (FTell() + sz > FileSize()) sz = FileSize() - FTell(); // Defensive clamp
+            ABSOLUTION_MIP Mip(k, mw, mh, sz) <optimize=false>;
+        }
+    }
+    else {
+        TEXT_HEADER Header <name="Header">;
+
+        // Optional atlas payload then the texture body.
+        FSeek(Header.textureAtlasOffset);
+        if (Header.textureAtlasSize > 0) ubyte AtlasData[Header.textureAtlasSize] <name="Atlas Data", comment="Texture atlas payload">;
+
+        // Body: Mips [startMip -> end]. startMip = textureScalingWidth (proxy cut point; 0 when the TEXT is self-contained). RAW when the two mip tables match.
+        local int startMip <hidden=true> =  Header.textureScalingWidth;
+        local int isLZ4    <hidden=true> = (Header.mipSizesCompressed[Header.mipLevels-1] != Header.mipSizes[Header.mipLevels-1]);
+
+        local int k     <hidden=true>; local int mw    <hidden=true>; local int mh <hidden=true>;
+        local int cprev <hidden=true>; local int dprev <hidden=true>;
+        local int csz   <hidden=true>; local int dsz   <hidden=true>;
+        cprev = (startMip > 0) ? Header.mipSizesCompressed[startMip-1] : 0;
+        dprev = (startMip > 0) ? Header.mipSizes[startMip-1]           : 0;
+
+        for (k = startMip; k < Header.mipLevels; k++) {
+            csz = Header.mipSizesCompressed[k] - cprev;
+            dsz = Header.mipSizes[k]           - dprev;
+            mw  = Header.imageWidth  >> k; if (mw < 1) mw = 1;
+            mh  = Header.imageHeight >> k; if (mh < 1) mh = 1;
+            if (csz > 0) {
+                if (FTell() + csz > FileSize()) csz = FileSize() - FTell();
+                GLACIER2_MIP Mip(k, mw, mh, csz, dsz, isLZ4) <optimize=false>;
+            }
+            cprev = Header.mipSizesCompressed[k];
+            dprev = Header.mipSizes[k];
+        }
+    }
+} TEXT <name="IO Interactive Glacier2 .TEXT RenderTexture">;
+
+//-------------------------------------------------------------------

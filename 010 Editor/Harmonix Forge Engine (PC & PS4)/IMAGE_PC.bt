@@ -1,0 +1,126 @@
+//---------------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: IMAGE_PC.bt
+//   Authors: Dodylectable, PikminGuts92 and Maxton (Initial Research)
+//   Version: 1.0
+//   Purpose: Reverse engineering Harmonix' Forge Engine's PC images
+//  Category: Images / Textures
+// File Mask: *.bmp_pc | *.png_pc
+//  ID Bytes: 06 00 00 00 09 00 00 00
+//   History: 
+//---------------------------------------------------------------------
+
+LittleEndian();
+
+typedef enum <uint> {
+    BC1 = 0,
+    BC5 = 3,
+    BC5_AGAIN = 6,
+    ARGB32 = 7
+} IMAGE_FORMAT_PC;
+
+typedef enum <uint> {
+    PC  = 9,
+    PS4 = 12
+} PLATFORM_SUBTYPE;
+
+typedef enum <uint> {
+    IMAGE_2D = 3
+} IMAGE_DIMENSION_TYPE;
+
+//---------------------------------------------------------------------
+
+typedef struct {
+    uint imageWidth  <name="Image Width">;
+    uint imageHeight <name="Image Height">;
+    uint imageDepth  <name="Image Depth", comment="Depth Slices (1 for 2D Textures)">;
+} MipEntry <read=Str("Mip Dimensions: %ux%u | Mip Depth: %u", this.imageWidth, this.imageHeight, this.imageDepth)>;
+
+typedef struct {
+    uint mipDataSize <name="Mip Map Data Size">;
+    byte mipData[mipDataSize] <name="Mip Map Data">;
+} Mip <name="Mip", read=Str("Mip Data Size: %u", this.mipDataSize)>;
+
+typedef struct {
+    uint Version <comment="Always 6">;
+    PLATFORM_SUBTYPE Platform;
+
+    uint Unknown_008;
+    uint Unknown_00C;
+    uint Constant_010 <comment="Always 16 (Memory alignment related?)">;
+
+    IMAGE_FORMAT_PC imageFormat <name="Image Format">;
+
+    uint Unknown_018;
+
+    uint textureArraySize <comment="Either 0 or 1 (Texture array size?)">;
+
+    uint Unknown_020;
+    uint Constant_024 <comment="Always 4 (Possibly log2(block_bytes): log2(16)=4)">;
+    uint Unknown_028;
+    uint Constant_02C <comment="Always 32">;
+    uint Unknown_030;
+    uint Unknown_034;
+    uint Unknown_038;
+    uint Unknown_03C;
+    uint Unknown_040;
+    uint Unknown_044;
+    uint Unknown_048;
+    uint Unknown_04C;
+    uint Unknown_050;
+    uint Unknown_054;
+    uint Unknown_058;
+    uint Unknown_05C;
+    uint Constant_060 <comment="Always 6 (Mirrors file version)">;
+    uint Constant_064 <comment="Always 16 (Mirrors Constant_010)">;
+
+    IMAGE_FORMAT_PC imageFormatMirror  <name="Image Format Mirror",  comment="Format enum (mirror of [0x014], confirmed same value)">;
+    IMAGE_FORMAT_PC imageFormatInverse <name="Image Format Inverse", comment="Inverse usage flag: (format==BC3)?3:0 — may encode color vs normal intent">;
+
+    uint imageArrayCount <name="Image Array Count?", comment="Always 1 (image array count?)">;
+
+    uint Unknown_074;
+
+    int imageFlagsA <name="Image Flags? A", comment="0xFFFFFFFF sentinel: DX11-style 'all mips' or 'no array slices' flag", format=hex>;
+    int imageFlagsB <name="Image Flags? B", comment="0xFFFFFFFF sentinel", format=hex>;
+
+    uint mipCountDuplicate <comment="Mip count duplicate (same value as mipCount at [0x0B4])">;
+    uint aspectMipBias <comment="1 + (log2(width) - log2(height)). =1 for square textures, =2 for 2:1 aspect">;
+
+    uint mipIndexOrFillerInfo <comment="Mip index or filter info - Varies by texture dimensions">;
+
+    uint Unknown_08C;
+    uint Unknown_090;
+    uint Unknown_094;
+    uint Unknown_098;
+
+    IMAGE_DIMENSION_TYPE imageDimensionType;
+
+    uint Unknown_0A0;
+    uint Unknown_0A4;
+    uint Unknown_0A8;
+    uint Unknown_0AC;
+    uint Unknown_0B0;
+
+    uint mipMapCount <comment="Number of mip levels">;
+    MipEntry Mips[mipMapCount] <comment="Per-mip dimension entries (12 bytes each)">;
+
+    // ---- Post-table fields (Variable length, padded to 0x158) ----
+    // Padding bytes between end of mip table and 0x158
+    local int mipTableEnd <hidden=true> = 0x0B8 + mipMapCount * 12;
+    local int padCount <hidden=true> = 0x118 - mipTableEnd;
+
+    if (padCount > 0) uchar paddingAfterMips[padCount] <comment="Zero padding after mip table, before data size fields">;
+
+    uint mipDataBlockCount;
+} Header <name="Header">;
+
+//---------------------------------------------------------------------
+
+struct {
+    Header header;
+    Mip mipsImageData[header.mipMapCount] <optimize=false>;
+} IMAGE_PC <name="Harmonix Forge Engine (.bmp/.png_pc) Image">;
+
+//---------------------------------------------------------------------

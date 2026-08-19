@@ -1,4 +1,4 @@
-//-------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
 //--- 010 Editor Binary Template
 //
 //      File: ARC.bt
@@ -11,13 +11,13 @@
 // File Mask: *.ARC
 //  ID Bytes: 41 52 43 00 | 00 43 52 41
 //   History: 
-//-------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
 
-// Files are ZLib Compressed for PC/PS3/Other platforms meanwhile Xbox 360 uses XMemCompress. (LZX)
+// Files are ZLib Compressed for PC/PS3/Other Platforms meanwhile Xbox 360 uses XMemCompress. (LZX)
 // File entries are 80 bytes long, File names being 64 characters long.
 // File extensions are stored in a CRC32 checksum.
 
-//-------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
 
 typedef enum <uint> {
     ARCHIVE               = 0x21034C90, // .arcs
@@ -27,8 +27,8 @@ typedef enum <uint> {
     TEXTURE_RENDER_TARGET = 0x7808EA10, // .rtex
     TEXTURE_SCENE         = 0x4323D83A, // .stex
     MATERIAL              = 0x2749C8A8, // .mrl
-    MOTION_LIST_DMC4      = 0x76820D81, // .lmt
     MOTION_LIST           = 0x139EE51D, // .lmt
+    MOTION_LIST_DMC4      = 0x76820D81, // .lmt
     VIBRATION             = 0x358012E8, // .vib
     SCHEDULER             = 0x4C0DB839, // .sdl
     MODEL                 = 0x1041BD9E, // .mod
@@ -124,7 +124,7 @@ typedef enum <uint> {
     SHAPE_AREA_HIT        = 0x754B82B4  // .ahs
 } FORMAT_TYPE;
 
-//-------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
 
 typedef struct {
     char Magic[4]    <name="Magic", comment="ARC: LE | CRA: BE">;
@@ -139,7 +139,7 @@ typedef struct {
     FORMAT_TYPE FormatHash    <name="File Format Extension Hash", comment="CRC32", format=hex>;
     uint FileSizeCompressed   <name="File Size (Compressed)",     comment="ZLib or LZX">;
     uint FileSizeUncompressed <name="File Size (Uncompressed)",   comment="Flagged with 0x40000000">;
-    if (Header.Version == 9) FORMAT_TYPE FormatHash2 <format=hex>;
+    if (Header.Version == 9) FORMAT_TYPE FormatHash2 <name="File Format Extension Hash", format=hex>;
     uint FileOffset <name="File Offset", comment="Absolute">;
 
     local uint RealUncompressedSize <hidden=true> = FileSizeUncompressed & 0x3FFFFFFF;
@@ -153,7 +153,7 @@ typedef struct {
     }
 } ARC_ENTRY <read=Str("%s | File Size: %u bytes | File Offset: %u | File Type: %s", this.FileName, this.FileSizeCompressed, this.FileOffset, EnumToString(this.FormatHash))>;
 
-//-------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
 
 struct {
     ARC_HEADER Header;
@@ -161,4 +161,4 @@ struct {
     if (Header.FileCount > 0) ARC_ENTRY Entries[Header.FileCount] <optimize=false>;
 } ARC <name="CAPCOM MT Framework .ARC Archive">;
 
-//-------------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------

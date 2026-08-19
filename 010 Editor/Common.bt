@@ -4,7 +4,7 @@
 //      File: Common.bt
 //   Authors: Dodylectable
 //   Version: 1.0
-//   Purpose: Simplifying tasks on templates by adding known structures to call from here
+//   Purpose: Simplifying tasks on templates by adding known structures to call from here.
 //  Category: Reverse Engineering
 // File Mask: *
 //  ID Bytes: bruh
@@ -19,17 +19,20 @@
 // DATA TYPES
 //------------
 
+// For some reason 010 doesn't support the "_t" data types by default, I just added it for funsies ¯\_(ツ)_/¯
+typedef  int64  int64_t; typedef  int32  int32_t; typedef  int16  int16_t; typedef  int8  int8_t;
+typedef uint64 uint64_t; typedef uint32 uint32_t; typedef uint16 uint16_t; typedef uint8 uint8_t;
+
 // Signed 24-bit integer.
 typedef struct { uint Value; } int24 <size=3, read=ReadInt24>;
 
 string ReadInt24(int24 &V) {
-    local uint Low  = ReadUShort(startof(V));
-    local uint High = ReadUByte(startof(V) + 2);
+    local uint Low    = ReadUShort(startof(V));
+    local uint High   = ReadUByte(startof(V) + 2);
     local int  Result = (High << 16) | Low;
 
     // Check the 24th bit (0x800000) for the sign.
     if (Result & 0x800000) { Result |= 0xFF000000; } // Sign extend to fill the 32-bit space.
-
     return Str("%d", Result);
 }
 
@@ -37,26 +40,25 @@ string ReadInt24(int24 &V) {
 typedef struct { uint Value; } uint24 <size=3, read=ReadUInt24>;
 
 string ReadUInt24(uint24 &V) {
-    local uint Low  = ReadUShort(startof(V));
-    local uint High = ReadUByte(startof(V) + 2);
+    local uint Low    = ReadUShort(startof(V));
+    local uint High   = ReadUByte(startof(V) + 2);
     local uint Result = (High << 16) | Low;
     
-    return Str("%u", Result);
+    return Str("%x", Result);
 }
 
-// ----------------------------------------------------------------------
+//---------------------------------------------------------------------------
 
 // Signed 48-bit integer.
 typedef struct { int64 Value; } int48 <size=6, read=ReadInt48>;
 
 string ReadInt48(int48 &V) {
-    local uint64 Low  = ReadUInt(startof(V));
-    local uint64 High = ReadUShort(startof(V) + 4);
+    local uint64 Low    = ReadUInt(startof(V));
+    local uint64 High   = ReadUShort(startof(V) + 4);
     local int64  Result = (High << 32) | Low;
     
     // Check the 48th bit (0x800000000000) for the sign.
     if (Result & 0x800000000000L) { Result |= 0xFFFF000000000000L; } // Sign extend to fill the 64-bit space.
-
     return Str("%Ld", Result);
 }
 
@@ -64,8 +66,8 @@ string ReadInt48(int48 &V) {
 typedef struct { uint64 Value; } uint48 <size=6, read=ReadUInt48>;
 
 string ReadUInt48(uint48 &V) {
-    local uint64 Low  = ReadUInt(startof(V));
-    local uint64 High = ReadUShort(startof(V) + 4);
+    local uint64 Low    = ReadUInt(startof(V));
+    local uint64 High   = ReadUShort(startof(V) + 4);
     local uint64 Result = (High << 32) | Low;
 
     return Str("%Lu", Result);
@@ -89,6 +91,12 @@ typedef struct {
     char   ActualString[Length] <name="Actual String">;
 } StringV2 <read=Str("%s", Length > 0 ? ActualString : "")>;
 
+// A byte length-prefixed string.
+typedef struct {
+    ubyte Length;
+    char  ActualString[Length] <name="Actual String">;
+} StringV3 <read=Str("%s", Length > 0 ? ActualString : "")>;
+
 //-------------------------------------------------------------------------------------------------
 
 //-------------
@@ -96,51 +104,57 @@ typedef struct {
 //-------------
 
 // Convert signed byte to float.
-string SByteToFloat(byte f) {
+string SByteToFloat(byte F) {
     string Str;
-    SPrintf(Str, "%lg", f / 128.0);
+    SPrintf(Str, "%lg", F / 128.0);
     return Str;
 };
 
 // Convert unsigned byte to float.
-string UByteToFloat(ubyte f) {
+string UByteToFloat(ubyte F) {
     string Str;
-    SPrintf(Str, "%lg", f / 255.0);
+    SPrintf(Str, "%lg", F / 255.0);
     return Str;
 };
 
+//---------------------------------------------------------------------------
+
 // Convert signed short to float.
-string SShortToFloat(short f) {
+string SShortToFloat(short F) {
     string Str;
-    SPrintf(Str, "%lg", f / 32768.0);
+    SPrintf(Str, "%lg", F / 32768.0);
     return Str;
 };
 
 // Convert unsigned short to float.
-string UShortToFloat(ushort f) {
+string UShortToFloat(ushort F) {
     string Str;
-    SPrintf(Str, "%lg", f / 65535.0);
+    SPrintf(Str, "%lg", F / 65535.0);
     return Str;
 };
 
+//---------------------------------------------------------------------------
+
 // Convert signed integer to float.
-string SIntToFloat(int f) {
+string SIntToFloat(int F) {
     string Str;
-    SPrintf(Str, "%lg", f / 2147483647.0);
+    SPrintf(Str, "%lg", F / 2147483647.0);
     return Str;
 };
 
 // Convert unsigned integer to float.
-string UIntToFloat(uint f) {
+string UIntToFloat(uint F) {
     string Str;
-    SPrintf(Str, "%lg", f / 4294967295.0);
+    SPrintf(Str, "%lg", F / 4294967295.0);
     return Str;
 };
 
+//---------------------------------------------------------------------------
+
 // Correct a file size by multiplying it with the DVD sector size, This is mainly for old games.
-string Sector(DWORD d) {
+string Sector(DWORD D) {
     string Str;   
-    SPrintf(Str, "%d", d * 2048);
+    SPrintf(Str, "%u", D * 2048);
     return Str;
 };
 
@@ -188,7 +202,7 @@ typedef struct {
     hfloat X, Y, Z, W;
 } VEC4HF <read=Str("(X: %f | Y: %f | Z: %f | W: %f)", this.X, this.Y, this.Z, this.W)>;
 
-//----------------------------------------------------------------------
+//---------------------------------------------------------------------------
 
 //----------
 // INTEGERS
@@ -202,7 +216,7 @@ typedef struct {
 // A vector of two unsigned integers.
 typedef struct {
     uint X, Y;
-} VEC2UI <read=Str("(X: %d | Y: %d)", this.X, this.Y)>;
+} VEC2UI <read=Str("(X: %u | Y: %u)", this.X, this.Y)>;
 
 // A vector of three signed integers.
 typedef struct {
@@ -212,7 +226,7 @@ typedef struct {
 // A vector of three unsigned integers.
 typedef struct {
     uint X, Y, Z;
-} VEC3UI <read=Str("(X: %d | Y: %d | Z: %d)", this.X, this.Y, this.Z)>;
+} VEC3UI <read=Str("(X: %u | Y: %u | Z: %u)", this.X, this.Y, this.Z)>;
 
 // A vector of four signed integers.
 typedef struct {
@@ -222,9 +236,9 @@ typedef struct {
 // A vector of four unsigned integers.
 typedef struct {
     uint X, Y, Z, W;
-} VEC4UI <read=Str("(X: %d | Y: %d | Z: %d | W: %d)", this.X, this.Y, this.Z, this.W)>;
+} VEC4UI <read=Str("(X: %u | Y: %u | Z: %u | W: %u)", this.X, this.Y, this.Z, this.W)>;
 
-//----------------------------------------------------------------------
+//---------------------------------------------------------------------------
 
 //--------
 // SHORTS
@@ -238,7 +252,7 @@ typedef struct {
 // A vector of two unsigned shorts.
 typedef struct {
     ushort X, Y;
-} VEC2US <read=Str("(X: %d | Y: %d)", this.X, this.Y)>;
+} VEC2US <read=Str("(X: %u | Y: %u)", this.X, this.Y)>;
 
 // A vector of three signed shorts.
 typedef struct {
@@ -248,7 +262,7 @@ typedef struct {
 // A vector of three unsigned shorts.
 typedef struct {
     ushort X, Y, Z;
-} VEC3US <read=Str("(X: %d | Y: %d | Z: %d)", this.X, this.Y, this.Z)>;
+} VEC3US <read=Str("(X: %u | Y: %u | Z: %u)", this.X, this.Y, this.Z)>;
 
 // A vector of four signed shorts.
 typedef struct {
@@ -258,9 +272,9 @@ typedef struct {
 // A vector of four unsigned shorts.
 typedef struct {
     ushort X, Y, Z, W;
-} VEC4US <read=Str("(X: %d | Y: %d | Z: %d | W: %d)", this.X, this.Y, this.Z, this.W)>;
+} VEC4US <read=Str("(X: %u | Y: %u | Z: %u | W: %u)", this.X, this.Y, this.Z, this.W)>;
 
-//----------------------------------------------------------------------
+//---------------------------------------------------------------------------
 
 //-------
 // BYTES
@@ -274,7 +288,7 @@ typedef struct {
 // A vector of three unsigned bytes.
 typedef struct {
     ubyte X, Y, Z;
-} VEC3UB <read=Str("(X: %d | Y: %d | Z: %d)", this.X, this.Y, this.Z)>;
+} VEC3UB <read=Str("(X: %u | Y: %u | Z: %u)", this.X, this.Y, this.Z)>;
 
 // A vector of four signed bytes.
 typedef struct {
@@ -284,6 +298,6 @@ typedef struct {
 // A vector of four unsigned bytes.
 typedef struct {
     ubyte X, Y, Z, W;
-} VEC4UB <read=Str("(X: %d | Y: %d | Z: %d | W: %d)", this.X, this.Y, this.Z, this.W)>;
+} VEC4UB <read=Str("(X: %u | Y: %u | Z: %u | W: %u)", this.X, this.Y, this.Z, this.W)>;
 
 //-------------------------------------------------------------------------------------------------

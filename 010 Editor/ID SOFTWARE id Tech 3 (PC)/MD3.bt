@@ -1,0 +1,127 @@
+//---------------------------------------------------------------
+//--- 010 Editor Binary Template
+//
+//      File: MD3.bt
+//   Authors: Dodylectable
+//   Version: 1.0
+//   Purpose: Reverse engineering id Software's id Tech 3 models
+//  Category: Models
+// File Mask: *.md3
+//  ID Bytes: 49 44 50 33
+//   History: 
+//---------------------------------------------------------------
+
+LittleEndian();
+#include "../Common.bt"
+
+//---------------------------------------------------------------
+
+typedef struct {
+    char Magic[4];
+    uint Version;
+
+    char Name[64];
+    uint Flags;
+    uint frameCount     <name="Keyframe Count">;
+    uint tagCount       <name="Tag Count">;
+    uint surfaceCount   <name="Surface Count">;
+    uint skinCount      <name="Skin Count", comment="Unused">;
+    
+    uint offsetFrames   <name="Keyframe Data Offset">;
+    uint offsetTags     <name="Tag Data Offset">;
+    uint offsetSurfaces <name="Surface Data Offset">;
+    uint offsetEnd      <name="End Data Offset", comment="Total file size basically">;
+} MD3_HEADER;
+
+typedef struct {
+    VEC3F boundsMin    <name="Bounding Box Minimum">;
+    VEC3F boundsMax    <name="Bounding Box Maximum">;
+    VEC3F localOrigin  <name="Local Origin">;
+    float Radius;
+    char frameName[16] <name="Frame Name">;
+} MD3_FRAME <read=frameName>;
+
+typedef struct {
+    char tagName[64] <name="Tag Name">;
+    VEC3F Origin;
+    VEC3F Axis[3];
+} MD3_TAG <read=tagName>;
+
+typedef struct {
+    char shaderName[64] <name="Shader Name">;
+    uint shaderIndex    <name="Shader Index">;
+} MD3_SHADER <read=shaderName>;
+
+typedef struct { VEC3UI Indices; } MD3_TRIANGLE;
+
+typedef struct { VEC2F ST; } MD3_TEXCOORD;
+
+typedef struct {
+    VEC3SS Positions;
+    ubyte normalZenith  <name="Normal (Zenith)">;
+    ubyte normalAzimuth <name="Normal (Azimuth)">;
+} MD3_VERTEX;
+
+typedef struct {
+    local uint startPosition <hidden=true> = FTell();
+
+    char Magic[4];
+    char surfaceName[64] <name="Surface Name">;
+    uint Flags;
+    uint frameCount  <name="Keyframe Count">;
+    uint shaderCount <name="Shader Count">;
+    uint vertexCount <name="Vertex Count">;
+    uint faceCount   <name="Face Count">;
+
+    uint offsetTris      <name="Face Data Offset">;
+    uint offsetShaders   <name="Shader Data Offset">;
+    uint offsetST        <name="UV Data Offset">;
+    uint offsetXYZNormal <name="Vertex Data Offset">;
+    uint offsetEnd       <name="Surface End Data Offset">;
+
+    // Parse sub-blocks based on relative offsets
+    if (shaderCount > 0) {
+        FSeek(startPosition + offsetShaders);
+        MD3_SHADER Shaders[shaderCount] <optimize=false, bgcolor=cLtGray>;
+    }
+
+    if (faceCount > 0) {
+        FSeek(startPosition + offsetTris);
+        MD3_TRIANGLE Triangles[faceCount] <optimize=false, bgcolor=cLtRed>;
+    }
+
+    if (vertexCount > 0) {
+        FSeek(startPosition + offsetST);
+        MD3_TEXCOORD TexCoords[vertexCount] <optimize=false, bgcolor=cLtPurple>;
+    }
+
+    if (vertexCount > 0 && frameCount > 0) {
+        FSeek(startPosition + offsetXYZNormal);
+        MD3_VERTEX Vertices[vertexCount * frameCount] <optimize=false, bgcolor=cLtYellow>;
+    }
+
+    FSeek(startPosition + offsetEnd);
+} MD3_SURFACE <read=surfaceName>;
+
+//---------------------------------------------------------------
+
+struct {
+    MD3_HEADER header <name="Header", bgcolor=cLtBlue>;
+
+    if (header.frameCount > 0 && header.offsetFrames > 0) {
+        FSeek(header.offsetFrames);
+        MD3_FRAME Frames[header.frameCount] <name="Global Frames", optimize=false, bgcolor=cLtGreen>;
+    }
+
+    if (header.tagCount > 0 && header.offsetTags > 0) {
+        FSeek(header.offsetTags);
+        MD3_TAG Tags[header.tagCount * header.frameCount] <name="Attachment Tags", optimize=false, bgcolor=cLtAqua>;
+    }
+
+    if (header.surfaceCount > 0 && header.offsetSurfaces > 0) {
+        FSeek(header.offsetSurfaces);
+        MD3_SURFACE Surfaces[header.surfaceCount] <name="Surfaces", optimize=false, bgcolor=cDkGreen>;
+    }
+} MD3 <name="id Software id Tech 3 .MD3 Model">;
+
+//---------------------------------------------------------------

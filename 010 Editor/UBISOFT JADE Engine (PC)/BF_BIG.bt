@@ -1,4 +1,4 @@
-//------------------------------------------------------------------------
+//-------------------------------------------------------------------------
 //--- 010 Editor Binary Template
 //
 //      File: BF_BIG.bt
@@ -9,63 +9,62 @@
 // File Mask: *.BF
 //  ID Bytes: 42 49 47 00
 //   History: 
-//------------------------------------------------------------------------
+//-------------------------------------------------------------------------
 
-// Beyond Good and Evil (PC) File Start:             0x015D34
-// Prince of Persia - Sands of Time (PC) File Start:  0x1796EC
-// Prince of Persia - Warrior Within (PC) File Start:  0x1C90AC
-// Prince of Persia - Two Thrones (PC) File Start:      0x1C34EC
-// Teenage Mutant Ninja Turtles (PC) File Start:         0x188144
+// All values listed here are taken from the PC versions of the games.
+// Beyond Good and Evil File Start:             0x015D34
+// Prince of Persia - Sands of Time File Start:  0x1796EC
+// Prince of Persia - Warrior Within File Start:  0x1C90AC
+// Prince of Persia - Two Thrones File Start:      0x1C34EC
+// Teenage Mutant Ninja Turtles File Start:         0x188144
 
 local uint arcVersion <hidden=true>;
 
-//------------------------------------------------------------------------
+//-------------------------------------------------------------------------
 
 typedef struct {
-    char Magic[4] <comment="Always BIG", name="Magic">;
-    uint Version <comment="Version", name="Version">; arcVersion = Version;
-    uint FileCount <name="File Count">;
-    uint FolderCount <name="Folder Count">;
+    char Magic[4]     <name="Magic", comment="Always BIG">;
+    uint Version      <name="Version", comment="Version">; arcVersion = Version;
+    uint fileCount    <name="File Count">;
+    uint folderCount  <name="Folder Count">;
     FSkip(16); // Reserved
-    uint HeaderUnkA <comment="Needs more research", name="Unknown Header Value A">;
+    uint unknownA     <name="Unknown Header Value A", format=hex>;
     FSkip(4); // 1
-    uint HeaderUnkB <comment="This integer is always 3422552206 for PoP and TMNT, 1895841785 for BGAE, Needs more research", name="Permanently Fixed Number A">;
-    uint FileCountAgain <comment="File count again for some reason", name="File Count (Again)">;
-    uint HeaderUnkC <comment="Needs more research", name="Unknown Header Value B">;
-    uint HeaderSize <comment="Always 68 bytes long", name="Header Length">;
+    uint unknownB     <name="Header Constant", comment="This integer is always 3422552206 for PoP and TMNT, 1895841785 for BGAE, Needs more research", format=hex>;
+    uint fileCountDup <hidden=true>;
+    uint unknownC     <name="Unknown Header Value B", format=hex>;
+    uint headerSize   <name="Header Size", comment="Always 68 bytes long">;
     FSkip(8); // Reserved
-    uint HeaderUnkD <comment="Needs more research", name="Unknown Header Value C">;
-} Header <name="Header", read=Str("BF Version: %u | File Count: %u Files | Folder Count: %u Folders", this.Version, this.FileCount, this.FolderCount)>;
+    uint unknownD     <name="Unknown Header Value C", format=hex>;
+} BF_HEADER <read=Str("BF Version %u | %u Files | %u Folders", this.Version, this.fileCount, this.folderCount)>;
 
 typedef struct {
-    uint FileOffset <name="File Offset">;
-    FSkip(4); // ?? I have no idea what this is
-} FileOffsets <name="File Offset", read=FileOffset>;
+    uint fileOffset        <name="File Offset">;
+    uint fileOffsetUnknown <name="Unknown", format=hex>;
+} BF_FILE_OFFSET <name="File Offsets", read=this.fileOffset>;
 
-typedef struct
-{
-    uint FileSize  <name="File Size">;
-    uint FileUnkA  <name="Unknown Value A", comment="Needs more research">;
-    uint FileUnkB  <name="Unknown Value B", comment="Needs more research">;
-    uint FileFlags <name="File Flags?", comment="File flags maybe? Needs more research">;
-    uint FileUnkC  <name="File Hash?", comment="Possible hash? Needs more research", format=hex>;
-    char FileListing[64] <name="File Listing", comment="Always 64 bytes long">;
+typedef struct {
+    uint fileSize      <name="File Size",            comment="Uncompressed">;
+    uint fileUnknowA   <name="Unknown File Value A", format=hex>;
+    uint fileUnknownB  <name="Unknown File Value B", format=hex>;
+    uint fileFlags     <name="File Flags?",          comment="Possible flags?", format=hex>;
+    uint fileUnknownC  <name="File Hash?",           comment="Possible hash?",  format=hex>;
+    char fileName[64]  <name="File Name",            comment="Always 64 bytes long">;
     if (arcVersion == 42) {
-        uint UnknownValueD;
-        char UnknownChecksum[32] <name="File Checksum?", comment="Looks like some sort of checksum or key, Needs more research">;
+        uint fileUnknownD            <name="Unknown Value C">;
+        char fileUnknownChecksum[32] <name="File Checksum?", comment="Looks like some sort of checksum or key">;
         FSkip(4); // Reserved
     }
-} Files <name="Archive Files", comment="Archive files", read=Str("File: %s | File Size: %u bytes | File Flags: %u", this.FileListing, this.FileSize, this.FileFlags)>;
+} BF_ENTRY <read=Str("%s | File Size: %u bytes | File Flags: 0x%X", this.fileName, this.fileSize, this.fileFlags)>;
 
-//------------------------------------------------------------------------
+//-------------------------------------------------------------------------
 
-struct
-{
-    Header header;
-    if (header.FileCount > 0)
-        FileOffsets fileoffsets[header.FileCount] <optimize=false, name="File Offsets">;
-        while (!ReadByte()) FSkip(1); // Skip empty padding bytes 
-        Files files[header.FileCount] <optimize=false, name="File Listing">;
+struct {
+    BF_HEADER Header;
+    if (Header.fileCount > 0)
+        BF_FILE_OFFSET fileOffsets[Header.fileCount] <optimize=false>;
+        while (!ReadByte()) FSkip(1); // Skip padding 
+        BF_ENTRY Entry[Header.fileCount] <optimize=false, name="File Listing">;
 } BF <name="Ubisoft JADE Engine .BF (BIG) Archive">;
 
-//------------------------------------------------------------------------
+//-------------------------------------------------------------------------
